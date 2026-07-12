@@ -11,7 +11,13 @@
   import * as math from '$lib/math'
   import { bind_renderer, build_orbit_props, SceneCamera } from '$lib/scene'
   import type { SceneControlProps } from '$lib/scene'
-  import type { ShowBonds, VectorColorMode, VectorLayerConfig } from '$lib/settings'
+  import type {
+    LightingMode,
+    MaterialStyle,
+    ShowBonds,
+    VectorColorMode,
+    VectorLayerConfig,
+  } from '$lib/settings'
   import { DEFAULTS } from '$lib/settings'
   import { create_pulse_animation } from '$lib/effects.svelte'
   import { colors } from '$lib/state.svelte'
@@ -48,12 +54,12 @@
     PARTIAL_OCCUPANCY_CAP_ARC,
   } from '$lib/structure/partial-occupancy'
   import type { MoyoDataset } from '@spglib/moyo-wasm'
-  import { T } from '@threlte/core'
+  import { T, useTask } from '@threlte/core'
   import * as extras from '@threlte/extras'
   import { type ComponentProps, type Snippet, untrack } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { BufferAttribute, BufferGeometry, Color, DoubleSide, Vector3 } from 'three'
-  import type { Mesh, Object3D } from 'three'
+  import type { DirectionalLight, Mesh, Object3D } from 'three'
   import Bond from './Bond.svelte'
   import type { BondEditResult, BondingStrategy, BondKeyTarget } from './bonding'
   import {
@@ -141,6 +147,12 @@
     float_fmt = `.3~f`,
     auto_rotate = DEFAULTS.structure.auto_rotate,
     bond_thickness = DEFAULTS.structure.bond_thickness,
+    bond_saturation = DEFAULTS.structure.bond_saturation,
+    bond_brightness = DEFAULTS.structure.bond_brightness,
+    bond_shininess = DEFAULTS.structure.bond_shininess,
+    outline_enabled = DEFAULTS.structure.outline_enabled,
+    outline_color = DEFAULTS.structure.outline_color,
+    outline_width = DEFAULTS.structure.outline_width,
     bond_color = DEFAULTS.structure.bond_color,
     bonding_strategy = DEFAULTS.structure.bonding_strategy,
     auto_bond_order = DEFAULTS.structure.auto_bond_order,
@@ -162,6 +174,16 @@
     initial_zoom = DEFAULTS.structure.initial_zoom,
     ambient_light = DEFAULTS.structure.ambient_light,
     directional_light = DEFAULTS.structure.directional_light,
+    fill_light = DEFAULTS.structure.fill_light,
+    rim_light = DEFAULTS.structure.rim_light,
+    lighting_mode = DEFAULTS.structure.lighting_mode,
+    light_azimuth = DEFAULTS.structure.light_azimuth,
+    light_elevation = DEFAULTS.structure.light_elevation,
+    atom_material = DEFAULTS.structure.atom_material,
+    atom_roughness = DEFAULTS.structure.atom_roughness,
+    atom_metalness = DEFAULTS.structure.atom_metalness,
+    atom_shininess = DEFAULTS.structure.atom_shininess,
+    atom_specular = DEFAULTS.structure.atom_specular,
     sphere_segments = DEFAULTS.structure.sphere_segments,
     lattice_props = {},
     symmetry_elements = [],
@@ -218,6 +240,11 @@
     structure?: AnyStructure
     base_structure?: AnyStructure // The original structure without image atoms, used for property color calculation
     atom_radius?: number // scale factor for atomic radii
+    atom_material?: MaterialStyle
+    atom_roughness?: number
+    atom_metalness?: number
+    atom_shininess?: number
+    atom_specular?: number
     same_size_atoms?: boolean // whether to use the same radius for all atoms. if not, the radius will be
     // determined by the atomic radius of the element
     camera_position?: [x: number, y: number, z: number] // initial camera position from which to render the scene
@@ -227,8 +254,19 @@
     camera_direction?: Vec3
     show_atoms?: boolean
     show_bonds?: ShowBonds
+    bond_saturation?: number
+    bond_brightness?: number
+    bond_shininess?: number
+    outline_enabled?: boolean
+    outline_color?: string
+    outline_width?: number
     show_site_labels?: boolean
     show_site_indices?: boolean
+    fill_light?: number
+    rim_light?: number
+    lighting_mode?: LightingMode
+    light_azimuth?: number
+    light_elevation?: number
     vector_configs?: Record<string, VectorLayerConfig>
     vector_scale?: number
     vector_color?: string
@@ -338,6 +376,49 @@
   bind_renderer((threlte_scene, threlte_camera) => {
     scene = threlte_scene
     camera = threlte_camera
+  })
+
+  let key_light = $state<DirectionalLight>()
+  let fill_light_ref = $state<DirectionalLight>()
+  let rim_light_ref = $state<DirectionalLight>()
+  let light_target = $state<Object3D>()
+  const light_direction = new Vector3()
+  const light_center = new Vector3()
+  let atom_specular_color = $derived(new Color().setScalar(atom_specular))
+
+  const place_light = (light: DirectionalLight | undefined, direction: Vector3) => {
+    if (!light) return
+    light_center.set(...rotation_target)
+    light.position.copy(direction).multiplyScalar(12).add(light_center)
+    if (light_target) light.target = light_target
+  }
+
+  // Camera-relative lighting keeps highlights stable while orbiting, which is
+  // easier to read for molecular models. World mode is available for fixed scenes.
+  useTask(() => {
+    if (!camera) return
+    const azimuth = (light_azimuth * Math.PI) / 180
+    const elevation = (light_elevation * Math.PI) / 180
+    light_direction.set(
+      Math.sin(azimuth) * Math.cos(elevation),
+      Math.sin(elevation),
+      Math.cos(azimuth) * Math.cos(elevation),
+    )
+    if (lighting_mode === `camera`) light_direction.applyQuaternion(camera.quaternion)
+    place_light(key_light, light_direction)
+
+    light_direction.set(-0.8, 0.2, 0.7).normalize()
+    if (lighting_mode === `camera`) light_direction.applyQuaternion(camera.quaternion)
+    place_light(fill_light_ref, light_direction)
+
+    light_direction.set(0.15, 0.55, -1).normalize()
+    if (lighting_mode === `camera`) light_direction.applyQuaternion(camera.quaternion)
+    place_light(rim_light_ref, light_direction)
+
+    if (light_target) {
+      light_target.position.set(...rotation_target)
+      light_target.updateMatrixWorld()
+    }
   })
 
   // Expose rotation target for external reset
@@ -912,14 +993,17 @@
     hovered_site = structure?.sites?.[hovered_idx ?? -1] ?? null
   })
   let lattice = $derived(structure && `lattice` in structure ? structure.lattice : null)
+  let periodic_lattice = $derived(lattice?.pbc.some(Boolean) ? lattice : null)
 
-  let visual_lattice = $derived(
-    base_structure && `lattice` in base_structure ? base_structure.lattice : lattice,
-  )
+  let visual_lattice = $derived.by(() => {
+    const candidate =
+      base_structure && `lattice` in base_structure ? base_structure.lattice : lattice
+    return candidate?.pbc.some(Boolean) ? candidate : null
+  })
 
   let rotation_target = $derived(
-    lattice
-      ? math.scale(math.add(...lattice.matrix), 0.5)
+    periodic_lattice
+      ? math.scale(math.add(...periodic_lattice.matrix), 0.5)
       : structure
         ? get_center_of_mass(structure)
         : ([0, 0, 0] as Vec3),
@@ -928,7 +1012,9 @@
   let neg_rotation_target = $derived(math.scale(rotation_target, -1) as Vec3)
 
   let structure_size = $derived.by(() => {
-    if (lattice) return (lattice.a + lattice.b + lattice.c) / 2
+    if (periodic_lattice) {
+      return (periodic_lattice.a + periodic_lattice.b + periodic_lattice.c) / 2
+    }
     if (!structure?.sites?.length) return 10
 
     const ranges = [0, 1, 2].map((axis_idx) => {
@@ -941,11 +1027,11 @@
   // Characteristic inter-atomic spacing: cube root of volume per atom.
   // Excludes PBC image atoms (orig_site_idx) so toggling image atoms doesn't affect arrow sizing.
   let char_atom_spacing = $derived.by(() => {
-    if (!lattice || !structure?.sites?.length) return structure_size
+    if (!periodic_lattice || !structure?.sites?.length) return structure_size
     const n_real = structure.sites.filter(
       (site) => site.properties?.orig_site_idx == null,
     ).length
-    return n_real > 0 ? Math.cbrt(lattice.volume / n_real) : structure_size
+    return n_real > 0 ? Math.cbrt(periodic_lattice.volume / n_real) : structure_size
   })
 
   // When uniform thickness is on, convert negative (length-relative) radii to
@@ -1017,8 +1103,8 @@
   // Whether a never|always|crystals|molecules setting applies to the current structure
   const applies_to_structure = (when: ShowBonds): boolean =>
     when === `always` ||
-    (when === `crystals` && Boolean(lattice)) ||
-    (when === `molecules` && !lattice)
+    (when === `crystals` && Boolean(periodic_lattice)) ||
+    (when === `molecules` && !periodic_lattice)
 
   // Declutter while a symmetry-element overlay actually draws something (elements present
   // AND an enabled kind among them): hide coordination polyhedra/bonds and shrink atoms so
@@ -1350,6 +1436,14 @@
     return offsets
   })
 
+  let rendered_atom_color_by_site = $derived.by(() => {
+    const result = new Map<number, string>()
+    for (const atom of atom_data) {
+      if (!result.has(atom.site_idx)) result.set(atom.site_idx, atom.color)
+    }
+    return result
+  })
+
   let instanced_bond_groups = $derived.by(() => {
     if (!structure?.sites || bonds_to_render.length === 0) return []
 
@@ -1357,6 +1451,10 @@
       thickness: bond_thickness,
       ambient_light,
       directional_light,
+      fill_light,
+      rim_light,
+      light_azimuth,
+      light_elevation,
       instances: [] as {
         matrix: Float32Array
         color_start: string
@@ -1368,7 +1466,9 @@
       const site_a = structure.sites[bond_data.site_idx_1]
       const site_b = structure.sites[bond_data.site_idx_2]
 
-      const get_majority_color = (site: typeof site_a) => {
+      const get_majority_color = (site: typeof site_a, site_idx: number) => {
+        const rendered_color = rendered_atom_color_by_site.get(site_idx)
+        if (rendered_color) return rendered_color
         if (!site?.species || site.species.length === 0) return bond_color
         const majority_species = site.species.reduce((max, spec) =>
           spec.occu > max.occu ? spec : max,
@@ -1376,8 +1476,8 @@
         return colors.element?.[majority_species.element] || bond_color
       }
 
-      const color_start = get_majority_color(site_a)
-      const color_end = get_majority_color(site_b)
+      const color_start = get_majority_color(site_a, bond_data.site_idx_1)
+      const color_end = get_majority_color(site_b, bond_data.site_idx_2)
       for (const matrix of get_bond_render_matrices(bond_data, bond_thickness)) {
         group.instances.push({ matrix, color_start, color_end })
       }
@@ -1697,8 +1797,48 @@
 
 {#snippet bond_instanced_mesh_snippet(group: ComponentProps<typeof Bond>[`group`])}
   {#key group.instances.length}
-    <Bond {group} />
+    <Bond
+      {group}
+      saturation={bond_saturation}
+      brightness={bond_brightness}
+      shininess={bond_shininess}
+      {outline_enabled}
+      {outline_color}
+      {outline_width}
+    />
   {/key}
+{/snippet}
+
+{#snippet atom_surface_material(color: string, opacity: number)}
+  {#if atom_material === `matte`}
+    <T.MeshLambertMaterial
+      {color}
+      side={DoubleSide}
+      transparent={opacity < 1}
+      {opacity}
+      depthWrite={opacity >= 1}
+    />
+  {:else if atom_material === `pbr`}
+    <T.MeshStandardMaterial
+      {color}
+      side={DoubleSide}
+      roughness={atom_roughness}
+      metalness={atom_metalness}
+      transparent={opacity < 1}
+      {opacity}
+      depthWrite={opacity >= 1}
+    />
+  {:else}
+    <T.MeshPhongMaterial
+      {color}
+      side={DoubleSide}
+      shininess={atom_shininess}
+      specular={atom_specular_color}
+      transparent={opacity < 1}
+      {opacity}
+      depthWrite={opacity >= 1}
+    />
+  {/if}
 {/snippet}
 
 {#snippet site_label_snippet(site_idx: number)}
@@ -1759,7 +1899,10 @@
   bind:orbit_controls
 />
 
-<T.DirectionalLight position={[3, 10, 10]} intensity={directional_light} />
+<T.Object3D bind:ref={light_target} />
+<T.DirectionalLight bind:ref={key_light} intensity={directional_light} />
+<T.DirectionalLight bind:ref={fill_light_ref} intensity={fill_light} />
+<T.DirectionalLight bind:ref={rim_light_ref} intensity={rim_light} />
 <T.AmbientLight intensity={ambient_light} />
 
 <!-- Apply manual rotation around center: translate to origin, rotate, translate back -->
@@ -1774,6 +1917,14 @@
           <InstancedAtoms
             atoms={instanced_atom_sets.base}
             {sphere_segments}
+            material_style={atom_material}
+            roughness={atom_roughness}
+            metalness={atom_metalness}
+            shininess={atom_shininess}
+            specular={atom_specular}
+            {outline_enabled}
+            {outline_color}
+            {outline_width}
             {...atom_instance_events(instanced_atom_sets.base, false)}
           />
         {/if}
@@ -1782,6 +1933,14 @@
           <InstancedAtoms
             atoms={instanced_atom_sets.image}
             {sphere_segments}
+            material_style={atom_material}
+            roughness={atom_roughness}
+            metalness={atom_metalness}
+            shininess={atom_shininess}
+            specular={atom_specular}
+            {outline_enabled}
+            {outline_color}
+            {outline_width}
             ghost={edit_mode_image}
             {...atom_instance_events(instanced_atom_sets.image, edit_mode_image)}
           />
@@ -1799,11 +1958,7 @@
               <T.SphereGeometry
                 args={[0.5, sphere_segments, sphere_segments, atom.start_phi, atom.phi_length]}
               />
-              <T.MeshStandardMaterial
-                color={partial_color}
-                opacity={ghost_opacity}
-                transparent={partial_edit_image}
-              />
+              {@render atom_surface_material(partial_color, ghost_opacity)}
             </T.Mesh>
 
             {#if atom.render_start_cap}
@@ -1816,12 +1971,7 @@
                     PARTIAL_OCCUPANCY_CAP_ARC.arc_length,
                   ]}
                 />
-                <T.MeshStandardMaterial
-                  color={partial_color}
-                  side={2}
-                  opacity={ghost_opacity}
-                  transparent={partial_edit_image}
-                />
+                {@render atom_surface_material(partial_color, ghost_opacity)}
               </T.Mesh>
             {/if}
             {#if atom.render_end_cap}
@@ -1834,12 +1984,7 @@
                     PARTIAL_OCCUPANCY_CAP_ARC.arc_length,
                   ]}
                 />
-                <T.MeshStandardMaterial
-                  color={partial_color}
-                  side={2}
-                  opacity={ghost_opacity}
-                  transparent={partial_edit_image}
-                />
+                {@render atom_surface_material(partial_color, ghost_opacity)}
               </T.Mesh>
             {/if}
           </T.Group>

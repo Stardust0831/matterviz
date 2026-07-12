@@ -71,7 +71,25 @@ export const pastel_hex = rgb_scheme_to_hex(pastel_colors)
 export const muted_hex = rgb_scheme_to_hex(muted_colors)
 export const dark_mode_hex = rgb_scheme_to_hex(dark_mode_colors)
 
+// High-contrast molecular palette. Start from the complete Jmol table and tune
+// the most common organic/biochemical elements for legibility on light and dark
+// backgrounds without using pure black for carbon or pure white for hydrogen.
+export const molecular_hex = {
+  ...jmol_hex,
+  H: `#f2f2f2`,
+  C: `#8a8d91`,
+  N: `#315fd5`,
+  O: `#e53935`,
+  F: `#72c95f`,
+  P: `#ee8a2d`,
+  S: `#e6c832`,
+  Cl: `#43b649`,
+  Br: `#9b3f35`,
+  I: `#7651a8`,
+} as const
+
 export const ELEMENT_COLOR_SCHEMES = {
+  Molecular: molecular_hex,
   Vesta: vesta_hex,
   Jmol: jmol_hex,
   Alloy: alloy_hex,
@@ -81,7 +99,7 @@ export const ELEMENT_COLOR_SCHEMES = {
 } as const
 
 export type ColorSchemeName = keyof typeof ELEMENT_COLOR_SCHEMES
-export const default_element_colors = { ...vesta_hex }
+export const default_element_colors = { ...molecular_hex }
 
 // Detect if a value is a CSS color string. d3-color parses hex, rgb()/rgba(),
 // hsl()/hsla(), and named colors case-insensitively, rejecting arbitrary words like

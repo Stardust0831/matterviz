@@ -31,6 +31,15 @@
     active_volume_idx?: number
   } = $props()
 
+  $effect(() => {
+    settings.material ??= DEFAULT_ISOSURFACE_SETTINGS.material
+    settings.roughness ??= DEFAULT_ISOSURFACE_SETTINGS.roughness
+    settings.metalness ??= DEFAULT_ISOSURFACE_SETTINGS.metalness
+    settings.shininess ??= DEFAULT_ISOSURFACE_SETTINGS.shininess
+    settings.specular ??= DEFAULT_ISOSURFACE_SETTINGS.specular
+    settings.flat_shading ??= DEFAULT_ISOSURFACE_SETTINGS.flat_shading
+  })
+
   // Clamp active_volume_idx when volumes list changes (e.g. dataset swap)
   $effect(() => {
     if (volumes.length > 0 && active_volume_idx >= volumes.length) {
@@ -245,6 +254,12 @@
     opacity: settings.opacity,
     show_negative: settings.show_negative,
     wireframe: settings.wireframe,
+    material: settings.material,
+    roughness: settings.roughness,
+    metalness: settings.metalness,
+    shininess: settings.shininess,
+    specular: settings.specular,
+    flat_shading: settings.flat_shading,
     halo: settings.halo,
     layers: n_layers,
     display_range: settings.display_range?.flat().join(`,`) ?? ``,
@@ -315,6 +330,43 @@
       <span>Wireframe</span>
       <input type="checkbox" bind:checked={settings.wireframe} />
     </label>
+  </div>
+
+  <div class="pane-row material-row">
+    <label>
+      <span>Material:</span>
+      <select bind:value={settings.material}>
+        <option value="matte">Matte</option>
+        <option value="glossy">Glossy</option>
+        <option value="pbr">PBR</option>
+        <option value="unlit">Unlit color</option>
+      </select>
+    </label>
+    {#if settings.material === `glossy`}
+      <label {@attach tooltip({ content: `Highlight sharpness` })}>
+        <span>Shine</span>
+        <input type="range" min={1} max={120} step={1} bind:value={settings.shininess} />
+      </label>
+      <label {@attach tooltip({ content: `Highlight intensity` })}>
+        <span>Specular</span>
+        <input type="range" min={0} max={1} step={0.02} bind:value={settings.specular} />
+      </label>
+    {:else if settings.material === `pbr`}
+      <label {@attach tooltip({ content: `Surface roughness` })}>
+        <span>Rough</span>
+        <input type="range" min={0} max={1} step={0.02} bind:value={settings.roughness} />
+      </label>
+      <label {@attach tooltip({ content: `Metallic response` })}>
+        <span>Metal</span>
+        <input type="range" min={0} max={1} step={0.02} bind:value={settings.metalness} />
+      </label>
+    {/if}
+    {#if settings.material !== `unlit`}
+      <label {@attach tooltip({ content: `Show individual mesh facets instead of smooth normals` })}>
+        <span>Faceted</span>
+        <input type="checkbox" bind:checked={settings.flat_shading} />
+      </label>
+    {/if}
   </div>
 
   {#if is_multi_layer && settings.layers}

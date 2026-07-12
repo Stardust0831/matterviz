@@ -319,4 +319,8 @@ export interface BondGroupWithGradients {
   instances: BondInstance[]
   ambient_light?: number
   directional_light?: number
+  fill_light?: number
+  rim_light?: number
+  light_azimuth?: number
+  light_elevation?: number
 }

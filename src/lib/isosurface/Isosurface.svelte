@@ -15,6 +15,7 @@
     BackSide,
     BufferAttribute,
     BufferGeometry,
+    Color,
     DoubleSide,
     FrontSide,
     Uint32BufferAttribute,
@@ -57,6 +58,8 @@
     // the original volume with periodic wrapping for full fidelity)
     tiling?: Vec3
   } = $props()
+
+  let surface_specular = $derived(new Color().setScalar(settings.specular ?? 0.12))
 
   let all_volumes = $derived(volumes.length ? volumes : volume ? [volume] : [])
 
@@ -549,8 +552,12 @@
         : layer.negative_color}
     {@const opacity = layer.opacity}
     {@const transparent = opacity < 1}
+    <!-- A closed transparent surface draws back and front faces. Split the
+      requested opacity between both passes so their combined alpha remains
+      equal to the UI value instead of making atoms inside appear nearly black. -->
+    {@const pass_opacity = transparent ? 1 - Math.sqrt(1 - opacity) : opacity}
     <!-- Recreate materials when vertexColors toggles (needs shader recompile) -->
-    {#key vertex_colored}
+    {#key `${vertex_colored}-${settings.material}-${settings.flat_shading}`}
       {#if settings.wireframe}
         <T.Mesh geometry={entry.geometry} frustumCulled={false}>
           <T.MeshBasicMaterial
@@ -570,16 +577,50 @@
             renderOrder={entry.render_order + pass_idx}
             frustumCulled={false}
           >
-            <T.MeshStandardMaterial
-              {color}
-              vertexColors={vertex_colored}
-              {transparent}
-              {opacity}
-              {side}
-              depthWrite={!transparent}
-              metalness={0.1}
-              roughness={0.6}
-            />
+            {#if settings.material === `unlit`}
+              <T.MeshBasicMaterial
+                {color}
+                vertexColors={vertex_colored}
+                {transparent}
+                opacity={pass_opacity}
+                {side}
+                depthWrite={!transparent}
+              />
+            {:else if settings.material === `glossy`}
+              <T.MeshPhongMaterial
+                {color}
+                vertexColors={vertex_colored}
+                {transparent}
+                opacity={pass_opacity}
+                {side}
+                depthWrite={!transparent}
+                shininess={settings.shininess ?? 18}
+                specular={surface_specular}
+                flatShading={settings.flat_shading ?? false}
+              />
+            {:else if settings.material === `pbr`}
+              <T.MeshStandardMaterial
+                {color}
+                vertexColors={vertex_colored}
+                {transparent}
+                opacity={pass_opacity}
+                {side}
+                depthWrite={!transparent}
+                metalness={settings.metalness ?? 0}
+                roughness={settings.roughness ?? 0.7}
+                flatShading={settings.flat_shading ?? false}
+              />
+            {:else}
+              <T.MeshLambertMaterial
+                {color}
+                vertexColors={vertex_colored}
+                {transparent}
+                opacity={pass_opacity}
+                {side}
+                depthWrite={!transparent}
+                flatShading={settings.flat_shading ?? false}
+              />
+            {/if}
           </T.Mesh>
         {/each}
       {/if}

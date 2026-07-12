@@ -286,6 +286,39 @@
     scene_props.rotation = [...scene_props.rotation]
   }
 
+  function apply_clean_molecular_preset() {
+    background_color = `#ffffff`
+    background_opacity = 1
+    scene_props.atom_material = `glossy`
+    scene_props.atom_shininess = 42
+    scene_props.atom_specular = 0.28
+    scene_props.outline_enabled = true
+    scene_props.outline_color = `#252a30`
+    scene_props.outline_width = 0.04
+    color_scheme = `Molecular`
+    color_scheme_selected = [`Molecular`]
+    scene_props.bond_saturation = 0.88
+    scene_props.bond_brightness = 0.92
+    scene_props.bond_shininess = 28
+    scene_props.lighting_mode = `camera`
+    scene_props.directional_light = 1.2
+    scene_props.ambient_light = 0.72
+    scene_props.fill_light = 0.38
+    scene_props.rim_light = 0.24
+    scene_props.light_azimuth = -28
+    scene_props.light_elevation = 42
+    if (isosurface_settings) {
+      isosurface_settings = {
+        ...isosurface_settings,
+        material: `matte`,
+        layers: isosurface_settings.layers?.map((layer) => ({
+          ...layer,
+          opacity: Math.min(layer.opacity, 0.65),
+        })),
+      }
+    }
+  }
+
   // Helper function to get example set of colors from an element color scheme
   function get_representative_colors(scheme_name: string): string[] {
     const scheme = ELEMENT_COLOR_SCHEMES[scheme_name as ColorSchemeName]
@@ -558,12 +591,28 @@
     title="Atoms"
     current_values={{
       atom_radius: scene_props.atom_radius,
+      atom_material: scene_props.atom_material,
+      atom_roughness: scene_props.atom_roughness,
+      atom_metalness: scene_props.atom_metalness,
+      atom_shininess: scene_props.atom_shininess,
+      atom_specular: scene_props.atom_specular,
+      outline_enabled: scene_props.outline_enabled,
+      outline_color: scene_props.outline_color,
+      outline_width: scene_props.outline_width,
       same_size_atoms: scene_props.same_size_atoms,
       color_scheme,
       ...atom_color_config,
     }}
     on_reset={() => {
       scene_props.atom_radius = DEFAULTS.structure.atom_radius
+      scene_props.atom_material = DEFAULTS.structure.atom_material
+      scene_props.atom_roughness = DEFAULTS.structure.atom_roughness
+      scene_props.atom_metalness = DEFAULTS.structure.atom_metalness
+      scene_props.atom_shininess = DEFAULTS.structure.atom_shininess
+      scene_props.atom_specular = DEFAULTS.structure.atom_specular
+      scene_props.outline_enabled = DEFAULTS.structure.outline_enabled
+      scene_props.outline_color = DEFAULTS.structure.outline_color
+      scene_props.outline_width = DEFAULTS.structure.outline_width
       scene_props.same_size_atoms = DEFAULTS.structure.same_size_atoms
       color_scheme = DEFAULTS.color_scheme
       color_scheme_selected = [DEFAULTS.color_scheme]
@@ -581,6 +630,41 @@
       title={SETTINGS_CONFIG.structure.atom_radius.description}
       >Radius <small>(Å)</small></NumberRangeInput
     >
+    <label>
+      Material
+      <select bind:value={scene_props.atom_material}>
+        {#each Object.entries(SETTINGS_CONFIG.structure.atom_material.enum ?? {}) as [value, label] (value)}
+          <option {value}>{label}</option>
+        {/each}
+      </select>
+    </label>
+    {#if scene_props.atom_material === `glossy`}
+      <NumberRangeInput min={1} max={120} step={1} bind:value={scene_props.atom_shininess}>
+        Shininess
+      </NumberRangeInput>
+      <NumberRangeInput min={0} max={1} step={0.02} bind:value={scene_props.atom_specular}>
+        Specular
+      </NumberRangeInput>
+    {:else if scene_props.atom_material === `pbr`}
+      <NumberRangeInput min={0} max={1} step={0.02} bind:value={scene_props.atom_roughness}>
+        Roughness
+      </NumberRangeInput>
+      <NumberRangeInput min={0} max={1} step={0.02} bind:value={scene_props.atom_metalness}>
+        Metalness
+      </NumberRangeInput>
+    {/if}
+    <label>
+      <input type="checkbox" bind:checked={scene_props.outline_enabled} />
+      Outline
+    </label>
+    {#if scene_props.outline_enabled}
+      <label>
+        Outline color <input type="color" bind:value={scene_props.outline_color} />
+      </label>
+      <NumberRangeInput min={0} max={0.15} step={0.005} bind:value={scene_props.outline_width}>
+        Outline width
+      </NumberRangeInput>
+    {/if}
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.same_size_atoms.description })}
     >
@@ -991,12 +1075,33 @@
     current_values={{
       directional_light: scene_props.directional_light,
       ambient_light: scene_props.ambient_light,
+      fill_light: scene_props.fill_light,
+      rim_light: scene_props.rim_light,
+      lighting_mode: scene_props.lighting_mode,
+      light_azimuth: scene_props.light_azimuth,
+      light_elevation: scene_props.light_elevation,
     }}
     on_reset={() => {
       scene_props.directional_light = DEFAULTS.structure.directional_light
       scene_props.ambient_light = DEFAULTS.structure.ambient_light
+      scene_props.fill_light = DEFAULTS.structure.fill_light
+      scene_props.rim_light = DEFAULTS.structure.rim_light
+      scene_props.lighting_mode = DEFAULTS.structure.lighting_mode
+      scene_props.light_azimuth = DEFAULTS.structure.light_azimuth
+      scene_props.light_elevation = DEFAULTS.structure.light_elevation
     }}
   >
+    <div class="pane-row">
+      <button type="button" onclick={apply_clean_molecular_preset}>Clean molecular preset</button>
+      <label>
+        Mode
+        <select bind:value={scene_props.lighting_mode}>
+          {#each Object.entries(SETTINGS_CONFIG.structure.lighting_mode.enum ?? {}) as [value, label] (value)}
+            <option {value}>{label}</option>
+          {/each}
+        </select>
+      </label>
+    </div>
     <NumberRangeInput
       min={0}
       max={4}
@@ -1013,6 +1118,18 @@
       title={SETTINGS_CONFIG.structure.ambient_light.description}
       >Ambient light</NumberRangeInput
     >
+    <NumberRangeInput min={0} max={4} step={0.01} bind:value={scene_props.fill_light}>
+      Fill light
+    </NumberRangeInput>
+    <NumberRangeInput min={0} max={4} step={0.01} bind:value={scene_props.rim_light}>
+      Rim light
+    </NumberRangeInput>
+    <NumberRangeInput min={-180} max={180} step={1} bind:value={scene_props.light_azimuth}>
+      Light azimuth <small>(°)</small>
+    </NumberRangeInput>
+    <NumberRangeInput min={-90} max={90} step={1} bind:value={scene_props.light_elevation}>
+      Light elevation <small>(°)</small>
+    </NumberRangeInput>
   </SettingsSection>
 
   {#if scene_props.show_bonds && scene_props.show_bonds !== `never`}
@@ -1024,6 +1141,9 @@
         aromatic_display: scene_props.aromatic_display,
         bond_color: scene_props.bond_color,
         bond_thickness: scene_props.bond_thickness,
+        bond_saturation: scene_props.bond_saturation,
+        bond_brightness: scene_props.bond_brightness,
+        bond_shininess: scene_props.bond_shininess,
       }}
       on_reset={() => {
         scene_props.bonding_strategy = DEFAULTS.structure.bonding_strategy
@@ -1031,6 +1151,9 @@
         scene_props.aromatic_display = DEFAULTS.structure.aromatic_display
         scene_props.bond_color = DEFAULTS.structure.bond_color
         scene_props.bond_thickness = DEFAULTS.structure.bond_thickness
+        scene_props.bond_saturation = DEFAULTS.structure.bond_saturation
+        scene_props.bond_brightness = DEFAULTS.structure.bond_brightness
+        scene_props.bond_shininess = DEFAULTS.structure.bond_shininess
       }}
     >
       <label>
@@ -1070,6 +1193,15 @@
         bind:value={scene_props.bond_thickness}
       >
         Thickness
+      </NumberRangeInput>
+      <NumberRangeInput min={0} max={1} step={0.02} bind:value={scene_props.bond_saturation}>
+        Saturation
+      </NumberRangeInput>
+      <NumberRangeInput min={0.1} max={1.5} step={0.02} bind:value={scene_props.bond_brightness}>
+        Brightness
+      </NumberRangeInput>
+      <NumberRangeInput min={1} max={120} step={1} bind:value={scene_props.bond_shininess}>
+        Shininess
       </NumberRangeInput>
     </SettingsSection>
   {/if}

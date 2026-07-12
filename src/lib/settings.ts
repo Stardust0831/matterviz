@@ -44,6 +44,8 @@ const SHOW_BONDS_ENUM = Object.fromEntries(
 ) as Readonly<Record<ShowBonds, string>>
 
 export type CameraProjection = `perspective` | `orthographic`
+export type MaterialStyle = `matte` | `glossy` | `pbr`
+export type LightingMode = `camera` | `world`
 
 export const VECTOR_COLOR_MODES = [
   `auto`,
@@ -189,11 +191,22 @@ export interface SettingsConfig {
     // Structure viewer settings
     // Atoms & Bonds
     atom_radius: SettingType<number>
+    atom_material: SettingType<MaterialStyle>
+    atom_roughness: SettingType<number>
+    atom_metalness: SettingType<number>
+    atom_shininess: SettingType<number>
+    atom_specular: SettingType<number>
     same_size_atoms: SettingType<boolean>
     show_atoms: SettingType<boolean>
     show_image_atoms: SettingType<boolean>
     sphere_segments: SettingType<number>
     bond_thickness: SettingType<number>
+    bond_saturation: SettingType<number>
+    bond_brightness: SettingType<number>
+    bond_shininess: SettingType<number>
+    outline_enabled: SettingType<boolean>
+    outline_color: SettingType<string>
+    outline_width: SettingType<number>
     auto_bond_order: SettingType<boolean>
     aromatic_display: SettingType<`aromatic` | `kekule`>
     show_bonds: SettingType<ShowBonds>
@@ -242,6 +255,11 @@ export interface SettingsConfig {
     site_label_offset: SettingType<Vec3>
     ambient_light: SettingType<number>
     directional_light: SettingType<number>
+    fill_light: SettingType<number>
+    rim_light: SettingType<number>
+    lighting_mode: SettingType<LightingMode>
+    light_azimuth: SettingType<number>
+    light_elevation: SettingType<number>
 
     // Site Vectors (force, magmom, spin) & Lattice
     vector_configs: SettingType<Record<string, VectorLayerConfig>>
@@ -507,9 +525,10 @@ const hierarchy_chart_settings = (
 export const SETTINGS_CONFIG: SettingsConfig = {
   // General display settings
   color_scheme: {
-    value: `Vesta`,
+    value: `Molecular`,
     description: `Color scheme for atoms and bonds`,
     enum: {
+      Molecular: `Molecular`,
       Vesta: `Vesta`,
       Jmol: `Jmol`,
       Alloy: `Alloy`,
@@ -553,6 +572,35 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       minimum: 0.1,
       maximum: 3.0,
     },
+    atom_material: {
+      value: `glossy`,
+      description: `Atom shading model: matte diffuse, glossy molecular, or physically based`,
+      enum: { matte: `Matte`, glossy: `Glossy`, pbr: `PBR` },
+    },
+    atom_roughness: {
+      value: 0.32,
+      description: `Atom roughness in PBR mode`,
+      minimum: 0,
+      maximum: 1,
+    },
+    atom_metalness: {
+      value: 0,
+      description: `Atom metalness in PBR mode`,
+      minimum: 0,
+      maximum: 1,
+    },
+    atom_shininess: {
+      value: 42,
+      description: `Size and sharpness of highlights in glossy mode`,
+      minimum: 1,
+      maximum: 120,
+    },
+    atom_specular: {
+      value: 0.28,
+      description: `Highlight intensity in glossy mode`,
+      minimum: 0,
+      maximum: 1,
+    },
     same_size_atoms: {
       value: false,
       description: `Render all atoms with the same size regardless of element`,
@@ -576,6 +624,38 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       description: `Thickness of bonds relative to atom radius`,
       minimum: 0.01,
       maximum: 1.0,
+    },
+    bond_saturation: {
+      value: 0.88,
+      description: `Element-color saturation along bonds`,
+      minimum: 0,
+      maximum: 1,
+    },
+    bond_brightness: {
+      value: 0.92,
+      description: `Bond color brightness`,
+      minimum: 0.1,
+      maximum: 1.5,
+    },
+    bond_shininess: {
+      value: 28,
+      description: `Bond highlight sharpness`,
+      minimum: 1,
+      maximum: 120,
+    },
+    outline_enabled: {
+      value: true,
+      description: `Draw a subtle silhouette around atoms and bonds`,
+    },
+    outline_color: {
+      value: `#252a30`,
+      description: `Silhouette outline color`,
+    },
+    outline_width: {
+      value: 0.04,
+      description: `Outline width relative to atom and bond radius`,
+      minimum: 0,
+      maximum: 0.15,
     },
     auto_bond_order: {
       value: false,
@@ -797,16 +877,45 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       maxItems: 3,
     },
     ambient_light: {
-      value: 1.5,
+      value: 0.72,
       description: `Ambient light intensity (0 = dark, higher = brighter)`,
       minimum: 0,
       maximum: 4,
     },
     directional_light: {
-      value: 2.2,
+      value: 1.2,
       description: `Directional light intensity (0 = no shadows, higher = stronger shadows)`,
       minimum: 0,
       maximum: 4,
+    },
+    fill_light: {
+      value: 0.38,
+      description: `Secondary light intensity that softens dark-facing surfaces`,
+      minimum: 0,
+      maximum: 4,
+    },
+    rim_light: {
+      value: 0.24,
+      description: `Back light intensity that separates silhouettes from the background`,
+      minimum: 0,
+      maximum: 4,
+    },
+    lighting_mode: {
+      value: `camera`,
+      description: `Keep molecular highlights stable relative to the camera or fixed in world space`,
+      enum: { camera: `Camera-relative`, world: `World-fixed` },
+    },
+    light_azimuth: {
+      value: -28,
+      description: `Horizontal angle of the main light in degrees`,
+      minimum: -180,
+      maximum: 180,
+    },
+    light_elevation: {
+      value: 42,
+      description: `Vertical angle of the main light in degrees`,
+      minimum: -90,
+      maximum: 90,
     },
 
     // Site Vectors (force, magmom, spin) & Lattice

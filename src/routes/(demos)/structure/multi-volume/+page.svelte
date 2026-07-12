@@ -111,7 +111,7 @@
       layers: (volumes) => [
         colored_layer(volumes, 0, 1, {
           isovalue: volumes[0].data_range.abs_max * 0.12,
-          opacity: 0.85,
+          opacity: 0.65,
         }),
       ],
     },

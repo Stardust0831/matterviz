@@ -3,6 +3,9 @@ import type { D3InterpolateName } from '$lib/colors'
 import type { Matrix3x3, Vec2, Vec3 } from '$lib/math'
 import { scale_lattice_matrix } from '$lib/math'
 import type { ParsedStructure } from '$lib/structure/parse'
+import type { MaterialStyle } from '$lib/settings'
+
+export type IsosurfaceMaterialStyle = MaterialStyle | `unlit`
 
 // Precomputed statistics for a volumetric grid (min, max, abs_max, mean)
 export interface DataRange {
@@ -71,6 +74,12 @@ export interface IsosurfaceSettings {
   negative_color: string // color for negative isovalue lobe
   show_negative: boolean // whether to render the negative lobe (-isovalue)
   wireframe: boolean
+  material?: IsosurfaceMaterialStyle
+  roughness?: number
+  metalness?: number
+  shininess?: number
+  specular?: number
+  flat_shading?: boolean
   halo: number // fraction of cell to extend isosurface beyond boundaries (0 = clip at cell edge, 0.5 = half cell)
   layers?: IsosurfaceLayer[] // if set, overrides single-isovalue mode
   // Fractional display range per lattice axis for periodic volumes, VESTA-style:
@@ -245,6 +254,12 @@ export const DEFAULT_ISOSURFACE_SETTINGS: IsosurfaceSettings = {
   negative_color: `#ef4444`, // red
   show_negative: false,
   wireframe: false,
+  material: `matte`,
+  roughness: 0.7,
+  metalness: 0,
+  shininess: 18,
+  specular: 0.12,
+  flat_shading: false,
   halo: 0,
 }
 
