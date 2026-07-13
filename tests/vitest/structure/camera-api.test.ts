@@ -15,8 +15,8 @@ describe(`declarative structure camera API`, () => {
     expect(scene_camera).toContain(`{up}`)
     expect(scene).toContain(`{#key camera_up_key}`)
     expect(scene).toContain(`up={canonical_camera_up}`)
-    expect(scene).toContain(`on_camera_sync?.()`)
     expect(scene).not.toContain(`camera.up.set`)
+    expect(scene).not.toContain(`previous_camera_up_key`)
     expect(scene).toContain(`onchange_extra: on_camera_change`)
   })
 

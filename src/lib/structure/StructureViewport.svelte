@@ -221,18 +221,8 @@
 
   // OrbitControls emits `change` for rotation, panning, wheel, touch, damping, and
   // auto-rotation. This callback is the single synchronization path for live camera state.
-  const sync_camera_pose = (): void => {
-    if (suppress_camera_change) return
-    const pos = read_camera_position()
-    if (!pos) return
-    const target = read_orbit_target()
-    camera_position = pos
-    camera_target = target
-  }
-
   const sync_camera_state = (): void => {
     if (suppress_camera_change) return
-    sync_camera_pose()
     const pos = read_camera_position()
     if (!pos) return
     const target = read_orbit_target()
@@ -350,7 +340,6 @@
       bind:camera_zoom
       bind:initial_camera_up
       on_camera_change={sync_camera_state}
-      on_camera_sync={sync_camera_pose}
       {camera_projection}
       {camera_direction}
       {interactive}

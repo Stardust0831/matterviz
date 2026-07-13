@@ -273,7 +273,6 @@
     on_bond_edit_start,
     on_add_atom,
     on_camera_change,
-    on_camera_sync,
     add_atom_mode = $bindable(false),
     add_element = $bindable(`C`),
     cursor = $bindable(`default`),
@@ -416,7 +415,6 @@
     // view so inactive panes skip interaction-only work while the active pane stays editable.
     interactive?: boolean
     on_camera_change?: () => void // Internal camera change synchronization callback
-    on_camera_sync?: () => void // Internal pre-rekey pose preservation callback
   } = $props()
 
   const pulse = create_pulse_animation(
@@ -432,22 +430,6 @@
 
   let canonical_camera_up = $derived(normalize_camera_up(camera_up))
   let camera_up_key = $derived(canonical_camera_up.join(`,`))
-
-  let previous_camera_up_key: string | undefined
-  $effect.pre(() => {
-    const current_key = camera_up_key
-    if (previous_camera_up_key !== undefined && previous_camera_up_key !== current_key) {
-      // Preserve the live pose on this component before the keyed camera subtree is replaced.
-      // StructureViewport mirrors the same pose into the primary bindable state below.
-      if (camera) camera_position = [camera.position.x, camera.position.y, camera.position.z]
-      if (orbit_controls?.target) {
-        const { x, y, z } = orbit_controls.target
-        camera_target = [x, y, z]
-      }
-      on_camera_sync?.()
-    }
-    previous_camera_up_key = current_key
-  })
 
   // Camera state is declarative, but the active Three camera remains the source of truth for
   // orientation and zoom after OrbitControls moves. Normalize external values before applying
