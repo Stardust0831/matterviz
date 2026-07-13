@@ -134,6 +134,23 @@ test.each(structures.filter((struct) => struct.id && ref_data[struct.id]))(
   },
 )
 
+test(`supports Multiwfn Bq ghost centers as structure pseudo-species`, () => {
+  const structure: AnyStructure = {
+    sites: [
+      {
+        species: [{ element: `Bq`, occu: 1, oxidation_state: 0 }],
+        abc: [0, 0, 0],
+        xyz: [1, 2, 3],
+        label: `Bq`,
+        properties: {},
+      },
+    ],
+  }
+
+  expect(struct_utils.get_element_counts(structure)).toEqual({ Bq: 1 })
+  expect(struct_utils.get_center_of_mass(structure)).toEqual([1, 2, 3])
+})
+
 test.each(structures)(`find_image_atoms`, async (structure) => {
   // Returns [atom_idx, img_xyz, img_abc][] tuples
   const image_atoms = struct_utils.find_image_atoms(structure)

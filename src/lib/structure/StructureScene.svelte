@@ -2,7 +2,7 @@
   import type { D3InterpolateName } from '$lib/colors'
   import { get_d3_interpolator } from '$lib/colors'
   import type { ElementSymbol } from '$lib/element'
-  import { element_by_symbol } from '$lib/element'
+  import { element_by_symbol, is_elem_symbol } from '$lib/element'
   import Isosurface from '$lib/isosurface/Isosurface.svelte'
   import type { IsosurfaceSettings, VolumetricData } from '$lib/isosurface/types'
   import { DEFAULT_ISOSURFACE_SETTINGS } from '$lib/isosurface/types'
@@ -1257,13 +1257,16 @@
       sym_data,
     ),
   )
+  const structure_element_color = (element: string): string | undefined =>
+    (colors.element as Record<string, string>)[element]
   // Compute weighted average radius for a site based on species occupancies
   // Normalizes by total occupancy so vacancy-containing sites render at full size
   const calc_weighted_radius = (site: Site): number => {
     const total_occu = site.species.reduce((sum, { occu }) => sum + occu, 0)
     const weighted_sum = site.species.reduce((sum, { element, occu }) => {
-      const override = element_radius_overrides?.[element as ElementSymbol]
-      return sum + occu * (override ?? atomic_radii[element] ?? 1)
+      const override = is_elem_symbol(element) ? element_radius_overrides?.[element] : undefined
+      const atomic_radius = is_elem_symbol(element) ? atomic_radii[element] : undefined
+      return sum + occu * (override ?? atomic_radius ?? 1)
     }, 0)
     return total_occu > 0 ? weighted_sum / total_occu : 1
   }
@@ -1312,7 +1315,7 @@
       const site_property_color = property_colors?.colors[orig_idx]
 
       const visible_species = site.species.filter(
-        ({ element }) => !hidden_elements.has(element),
+        ({ element }) => !is_elem_symbol(element) || !hidden_elements.has(element),
       )
       const slice_geometry = compute_slice_geometry(visible_species)
       return slice_geometry.map((slice_data) => {
@@ -1322,7 +1325,7 @@
           occupancy: slice_data.occupancy,
           position: site.xyz,
           radius,
-          color: site_property_color ?? colors.element?.[slice_data.element],
+          color: site_property_color ?? structure_element_color(slice_data.element) ?? `#808080`,
           has_partial_occupancy: slice_data.occupancy < 1,
           start_phi: slice_data.start_phi,
           end_phi: slice_data.end_phi,
@@ -1341,7 +1344,7 @@
     if (!structure?.sites) return false
     const site = structure.sites[site_idx]
     const has_visible_element = site?.species.some(
-      ({ element }) => !hidden_elements.has(element),
+      ({ element }) => !is_elem_symbol(element) || !hidden_elements.has(element),
     )
     const orig_idx = get_orig_site_idx(site, site_idx)
     const prop_val = property_colors?.values[orig_idx]
@@ -1448,7 +1451,9 @@
     const orig_idx = get_orig_site_idx(site, site_idx)
     const element = get_majority_element(site)
     return (
-      property_colors?.colors[orig_idx] ?? (element && colors.element?.[element]) ?? `#808080`
+      property_colors?.colors[orig_idx] ??
+        (element && structure_element_color(element)) ??
+        `#808080`
     )
   }
 
@@ -1574,7 +1579,7 @@
         const majority_species = site.species.reduce((max, spec) =>
           spec.occu > max.occu ? spec : max,
         )
-        return colors.element?.[majority_species.element] || bond_color
+        return structure_element_color(majority_species.element) || bond_color
       }
 
       const color_start = get_majority_color(site_a, bond_data.site_idx_1)
@@ -1803,7 +1808,7 @@
                       .element
                   : undefined
               arrow_color =
-                (majority_element && colors.element?.[majority_element]) || vector_color
+                (majority_element && structure_element_color(majority_element)) || vector_color
             }
           }
 

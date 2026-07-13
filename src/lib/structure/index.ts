@@ -1,7 +1,7 @@
 import type { CompositionType } from '$lib/composition'
 import { ATOMIC_WEIGHTS } from '$lib/composition/parse'
 import type { ElementSymbol } from '$lib/element'
-import { element_by_symbol, element_data } from '$lib/element'
+import { element_by_symbol, element_data, is_elem_symbol } from '$lib/element'
 import type { Vec3 } from '$lib/math'
 import * as math from '$lib/math'
 import type { CameraProjection } from '$lib/settings'
@@ -60,8 +60,12 @@ export const DEFAULT_STRUCTURE_VIEWS: StructureView[] = [
   { label: `Right`, projection: `orthographic`, direction: [1, 0, 0] },
 ]
 
+// Structure-only pseudo-species emitted by Multiwfn for ghost centers. `Bq`
+// deliberately is not part of ElementSymbol or the periodic-table data.
+export type StructureElement = ElementSymbol | `Bq`
+
 export type Species = {
-  element: ElementSymbol
+  element: StructureElement
   occu: number
   oxidation_state: number
 }
@@ -128,7 +132,8 @@ export function get_element_counts(structure: AnyStructure) {
   for (const site of structure.sites) {
     for (const species of site.species) {
       const { element: elem, occu } = species
-      elements[elem] = (elements[elem] ?? 0) + occu
+      const elements_by_symbol = elements as Record<string, number>
+      elements_by_symbol[elem] = (elements_by_symbol[elem] ?? 0) + occu
     }
   }
   return elements
@@ -189,7 +194,9 @@ export function get_center_of_mass(structure: AnyStructure): Vec3 {
   for (const site of structure.sites) {
     // Handle disordered sites by summing contributions from all species
     for (const species of site.species) {
-      const atomic_weight = ATOMIC_WEIGHTS.get(species.element) ?? 1
+      const atomic_weight = is_elem_symbol(species.element)
+        ? (ATOMIC_WEIGHTS.get(species.element) ?? 1)
+        : 1
       const weight = atomic_weight * species.occu
 
       const scaled_pos = math.scale(site.xyz, weight)

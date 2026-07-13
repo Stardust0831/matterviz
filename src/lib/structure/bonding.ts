@@ -1,7 +1,7 @@
 // Bonding algorithms for structure visualization
 
 import element_data, { element_by_symbol } from '../element/data'
-import type { ElementSymbol } from '$lib/element'
+import { is_elem_symbol, type ElementSymbol } from '$lib/element'
 import type { Vec2, Vec3 } from '$lib/math'
 import * as math from '$lib/math'
 import type { AnyStructure, BondOrder, BondPair, Site, StructureBond } from '$lib/structure'
@@ -17,7 +17,8 @@ const covalent_radii = new Map<string, number>(
 // Majority-occupancy element of a (possibly disordered) site
 export const get_majority_element = (site: Site | undefined): ElementSymbol | null => {
   if (!site?.species?.length) return null
-  return site.species.reduce((max, spec) => (spec.occu > max.occu ? spec : max)).element
+  const element = site.species.reduce((max, spec) => (spec.occu > max.occu ? spec : max)).element
+  return is_elem_symbol(element) ? element : null
 }
 
 // Large low-valent A-site cations whose coordination polyhedra (CN 8-12) tend to

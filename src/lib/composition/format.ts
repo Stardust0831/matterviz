@@ -17,7 +17,8 @@ const structure_to_composition = (structure: AnyStructure): CompositionType => {
       for (const species of site.species) {
         const element = species.element
         const occu = species.occu ?? 1
-        composition[element] = (composition[element] ?? 0) + occu
+        const composition_by_symbol = composition as Record<string, number>
+        composition_by_symbol[element] = (composition_by_symbol[element] ?? 0) + occu
       }
     }
   }

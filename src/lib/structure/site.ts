@@ -1,10 +1,9 @@
 // Shared single-species Site construction used by all structure/trajectory/volumetric parsers
-import type { ElementSymbol } from '$lib/element'
 import type { Vec3 } from '$lib/math'
-import type { Site } from '$lib/structure'
+import type { Site, StructureElement } from '$lib/structure'
 
 export const make_site = (
-  element: ElementSymbol,
+  element: StructureElement,
   abc: Vec3,
   xyz: Vec3,
   label: string,

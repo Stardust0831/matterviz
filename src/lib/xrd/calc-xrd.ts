@@ -1,6 +1,5 @@
 import type { CompositionType } from '$lib/composition'
-import type { ElementSymbol } from '$lib/element'
-import { element_data } from '$lib/element'
+import { element_data, is_elem_symbol, type ElementSymbol } from '$lib/element'
 import * as math from '$lib/math'
 import type { Vec2 } from '$lib/math'
 import type { Crystal } from '$lib/structure/index'
@@ -185,7 +184,8 @@ export function compute_xrd_pattern(structure: Crystal, options: XrdOptions = {}
 
   for (const site of structure.sites) {
     for (const species of site.species) {
-      const element_symbol = species.element
+      if (!is_elem_symbol(species.element)) continue // Structure pseudo-species have no scattering data
+      const element_symbol: ElementSymbol = species.element
       if (ELEMENT_Z[element_symbol] === undefined) {
         throw new Error(`Unknown atomic number for element ${element_symbol}`)
       }

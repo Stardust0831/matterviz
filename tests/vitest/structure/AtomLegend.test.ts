@@ -1096,7 +1096,7 @@ describe(`Disordered Site Color Assignment`, () => {
   const compute_atom_colors = (species: Species[], site_property_color?: string) =>
     species.map(({ element }) => ({
       element,
-      color: site_property_color ?? colors.element?.[element],
+      color: site_property_color ?? (colors.element as Record<string, string>)[element],
     }))
 
   const create_species = (element: ElementSymbol, occu: number): Species => ({

@@ -1,4 +1,5 @@
 import { ATOMIC_NUMBER_TO_SYMBOL, SYMBOL_TO_ATOMIC_NUMBER } from '$lib/composition/parse'
+import { is_elem_symbol, type ElementSymbol } from '$lib/element'
 import type { Matrix3x3, Vec3 } from '$lib/math'
 import * as math from '$lib/math'
 import { DEFAULTS } from '$lib/settings'
@@ -127,12 +128,13 @@ export async function ensure_moyo_wasm_ready(wasm_url?: string) {
 function get_site_atomic_number(site: Crystal[`sites`][number], site_idx: number): number {
   const occupancy_by_element = new Map<keyof typeof SYMBOL_TO_ATOMIC_NUMBER, number>()
   for (const { element, occu } of site.species) {
-    if (occu <= OCCUPANCY_EPS) continue
+    if (occu <= OCCUPANCY_EPS || !is_elem_symbol(element)) continue
     occupancy_by_element.set(element, (occupancy_by_element.get(element) ?? 0) + occu)
   }
 
-  let selected_element: (typeof site.species)[number][`element`] | undefined =
-    site.species[0]?.element
+  let selected_element: ElementSymbol | undefined = site.species
+    .map((species) => species.element)
+    .find(is_elem_symbol)
   let best_occupancy = -Infinity
   occupancy_by_element.forEach((occupancy, element) => {
     if (
