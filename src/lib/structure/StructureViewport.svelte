@@ -197,7 +197,9 @@
   // move to the pose that happened to be current at the re-key.
   let initial_camera_position = $state<Vec3 | undefined>(undefined)
   let initial_camera_target = $state<Vec3 | undefined>(undefined)
-  let snapshot_structure = $state<AnyStructure | undefined>(undefined)
+  // Periodic image generation passes a raw object. Preserve its identity so the
+  // camera snapshot effect does not compare a deep proxy against the raw input.
+  let snapshot_structure = $state.raw<AnyStructure | undefined>(undefined)
   let snapshot_structure_initialized = false
   let camera_is_moving = $state(false)
   let suppress_camera_change = false

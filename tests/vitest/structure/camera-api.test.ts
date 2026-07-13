@@ -70,4 +70,11 @@ describe(`declarative structure camera API`, () => {
     expect(scene).toContain(`camera_up?: Vec3`)
     expect(scene).toContain(`camera_zoom?: number`)
   })
+
+  test(`keeps periodic structure identity snapshots raw`, () => {
+    expect(viewport).toContain(
+      `let snapshot_structure = $state.raw<AnyStructure | undefined>(undefined)`,
+    )
+    expect(viewport).toContain(`snapshot_structure !== current_structure`)
+  })
 })
