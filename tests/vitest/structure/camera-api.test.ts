@@ -25,6 +25,9 @@ describe(`declarative structure camera API`, () => {
     expect(viewport).toContain(`on_camera_change={sync_camera_state}`)
     expect(viewport).toContain(`const sync_camera_state = (): void =>`)
     expect(viewport).not.toContain(`setInterval(sync`)
+    expect(viewport).toContain(
+      `if (camera_projection === \`orthographic\` && zoom !== undefined) camera_zoom = zoom`,
+    )
     expect(viewport).toContain(`camera_zoom: camera_projection === \`orthographic\` ? zoom`)
   })
 

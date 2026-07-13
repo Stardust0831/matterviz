@@ -240,6 +240,7 @@
     const zoom = read_camera_zoom()
     report_moved?.(true)
     if (up) camera_up = up
+    if (camera_projection === `orthographic` && zoom !== undefined) camera_zoom = zoom
     on_camera_move?.({
       structure,
       camera_has_moved: true,
