@@ -26,6 +26,7 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { WebGLRenderer, type Camera, type OrthographicCamera, type Scene } from 'three'
   import type { AtomColorConfig } from './atom-properties'
+  import { reset_camera_to_snapshot } from './camera-state'
   import StructureScene from './StructureScene.svelte'
 
   // WebGL contexts survive renderer.dispose() unless explicitly released.
@@ -191,6 +192,13 @@
     $state<ComponentProps<typeof StructureScene>[`orbit_controls`]>(undefined)
   let rotation_target_ref = $state<Vec3 | undefined>(undefined)
   let initial_computed_zoom = $state<number | undefined>(undefined)
+  // Keep the reset baseline in this (non-keyed) component. StructureScene recreates its
+  // camera and controls when camera_up changes, so a baseline held there would silently
+  // move to the pose that happened to be current at the re-key.
+  let initial_camera_position = $state<Vec3 | undefined>(undefined)
+  let initial_camera_target = $state<Vec3 | undefined>(undefined)
+  let snapshot_structure = $state<AnyStructure | undefined>(undefined)
+  let snapshot_structure_initialized = false
   let camera_is_moving = $state(false)
   let suppress_camera_change = false
 
@@ -219,6 +227,59 @@
       ? (camera as OrthographicCamera).zoom
       : undefined
 
+  // Capture the first settled camera pose for this viewport. This intentionally lives
+  // outside StructureScene's keyed camera subtree so X/Y orbit followed by a declarative
+  // Z roll still resets to the original position, target, up, and zoom.
+  $effect(() => {
+    const current_structure = structure
+    // Establish these dependencies even on the structure-initialization pass below.
+    // Otherwise the early return prevents the effect from rerunning when the camera mounts.
+    const current_camera = camera
+    const current_controls = orbit_controls
+    const current_rotation_target = rotation_target_ref
+    void current_camera
+    void current_controls
+    void current_rotation_target
+    if (!snapshot_structure_initialized || snapshot_structure !== current_structure) {
+      snapshot_structure = current_structure
+      snapshot_structure_initialized = true
+      initial_camera_position = undefined
+      initial_camera_target = undefined
+      initial_camera_up = undefined
+      initial_computed_zoom = undefined
+      return
+    }
+
+    const pos = read_camera_position()
+    if (!pos || pos.every((coord) => coord === 0)) return
+    if (initial_camera_position === undefined) initial_camera_position = [...pos]
+    if (initial_camera_target === undefined) {
+      const target = read_orbit_target() ?? rotation_target_ref
+      if (target) initial_camera_target = [...target]
+    }
+    if (initial_camera_up === undefined) {
+      const up = read_camera_up()
+      if (up) initial_camera_up = [...up]
+    }
+    if (initial_computed_zoom === undefined && camera_projection === `orthographic`) {
+      const zoom = read_camera_zoom()
+      if (zoom !== undefined) initial_computed_zoom = zoom
+    }
+  })
+
+  // OrbitControls.saveState() is initialized from the current keyed camera. Replace that
+  // internal baseline with the viewport's original snapshot so native reset() remains safe
+  // after any number of camera_up re-keys without changing the live pose.
+  $effect(() => {
+    const controls = orbit_controls
+    const position = initial_camera_position
+    const target = initial_camera_target
+    if (!controls || !position || !target) return
+    controls.position0.set(...position)
+    controls.target0.set(...target)
+    if (initial_computed_zoom !== undefined) controls.zoom0 = initial_computed_zoom
+  })
+
   // OrbitControls emits `change` for rotation, panning, wheel, touch, damping, and
   // auto-rotation. This callback is the single synchronization path for live camera state.
   const sync_camera_state = (): void => {
@@ -228,6 +289,11 @@
     const target = read_orbit_target()
     const up = read_camera_up()
     const zoom = read_camera_zoom()
+    // Keep position/target live for declarative bindings. This runs only from real
+    // OrbitControls change events, never from a pre-rekey effect, so a new external
+    // camera_position/target command cannot be overwritten by the old keyed camera.
+    camera_position = [...pos]
+    camera_target = target ? [...target] : undefined
     report_moved?.(true)
     if (up) camera_up = up
     if (camera_projection === `orthographic` && zoom !== undefined) camera_zoom = zoom
@@ -244,27 +310,30 @@
   // Reset this pane's camera. The primary pane is given on_camera_reset, so it also emits.
   function reset_camera() {
     suppress_camera_change = true
-    camera_position = [0, 0, 0]
-    camera_target = rotation_target_ref
-    camera_up = initial_camera_up ?? camera_up
+    const reset_position: Vec3 = initial_camera_position ?? [0, 0, 0]
+    const reset_target = initial_camera_target ?? rotation_target_ref
+    const reset_up: Vec3 = initial_camera_up ?? camera_up
+    camera_position = [...reset_position]
+    camera_target = reset_target ? [...reset_target] : undefined
+    camera_up = [...reset_up]
+    if (camera) {
+      camera.position.set(...reset_position)
+      camera.up.set(...reset_up)
+      camera.updateMatrixWorld()
+    }
     report_moved?.(false)
     if (orbit_controls && camera) {
-      if (`reset` in orbit_controls && typeof orbit_controls.reset === `function`) {
-        orbit_controls.reset()
-      }
-      if (orbit_controls.target && rotation_target_ref) {
-        orbit_controls.target.set(...rotation_target_ref)
-      }
-      if (camera.type === `OrthographicCamera` && initial_computed_zoom !== undefined) {
-        const ortho_camera = camera as OrthographicCamera
-        ortho_camera.zoom = initial_computed_zoom
-        ortho_camera.updateProjectionMatrix()
+      reset_camera_to_snapshot(camera, orbit_controls, {
+        position: reset_position,
+        target: reset_target,
+        up: reset_up,
+        zoom: initial_computed_zoom,
+      })
+      if (camera.type === `OrthographicCamera` && initial_computed_zoom !== undefined)
         camera_zoom = initial_computed_zoom
-      }
-      if (typeof orbit_controls.update === `function`) orbit_controls.update()
       camera_position = read_camera_position() ?? camera_position
       camera_target = read_orbit_target()
-      camera_up = initial_camera_up ?? read_camera_up() ?? camera_up
+      camera_up = [...reset_up]
       camera_zoom = read_camera_zoom() ?? camera_zoom
     }
     suppress_camera_change = false
@@ -338,7 +407,6 @@
       {camera_target}
       bind:camera_up
       bind:camera_zoom
-      bind:initial_camera_up
       on_camera_change={sync_camera_state}
       {camera_projection}
       {camera_direction}

@@ -256,7 +256,6 @@
     orbit_controls = $bindable(),
     rotation_target_ref = $bindable(),
     initial_computed_zoom = $bindable(),
-    initial_camera_up = $bindable(),
     hidden_elements = $bindable(new SvelteSet()),
     hidden_prop_vals = $bindable(new SvelteSet<number | string>()),
     element_radius_overrides = $bindable<Partial<Record<ElementSymbol, number>>>({}),
@@ -388,8 +387,7 @@
     rotation?: Vec3 // rotation control prop
     orbit_controls?: ComponentProps<typeof extras.OrbitControls>[`ref`] // OrbitControls instance
     rotation_target_ref?: Vec3 // Expose rotation target for reset
-    initial_computed_zoom?: number // Expose initial zoom for reset
-    initial_camera_up?: Vec3 // Expose initial up direction for reset
+    initial_computed_zoom?: number // Responsive auto-fit zoom used by the viewport reset baseline
     hidden_elements?: Set<ElementSymbol>
     hidden_prop_vals?: Set<number | string> // Track hidden property values (e.g. Wyckoff positions, coordination numbers)
     element_radius_overrides?: Partial<Record<ElementSymbol, number>> // Per-element absolute radius in Angstroms
@@ -517,18 +515,6 @@
   // Expose rotation target for external reset
   $effect(() => {
     rotation_target_ref = rotation_target
-  })
-
-  // Track initial computed zoom for reset
-  let stored_initial_zoom = $state<number | undefined>(undefined)
-  let stored_initial_up = $state<Vec3 | undefined>(undefined)
-  $effect(() => {
-    if (stored_initial_zoom === undefined && computed_zoom > 0) {
-      stored_initial_zoom = computed_zoom
-    }
-    initial_computed_zoom = stored_initial_zoom
-    if (stored_initial_up === undefined) stored_initial_up = [...canonical_camera_up]
-    initial_camera_up = stored_initial_up
   })
 
   let atom_tooltip_active = $state(false)
@@ -1190,10 +1176,16 @@
       : auto_computed_zoom,
   )
 
+  $effect(() => {
+    initial_computed_zoom =
+      camera_projection === `orthographic`
+        ? clamp_camera_zoom(auto_computed_zoom, min_zoom, max_zoom)
+        : undefined
+  })
+
   $effect.pre(() => {
     // Simple initial camera auto-position: proportional to structure size and fov
     if (camera_position.every((val) => val === 0) && structure) {
-      stored_initial_zoom = undefined
       const distance = Math.max(1, structure_size) * (60 / fov)
       // When a view direction is given (multi-side view), place the camera
       // target-relative along it; otherwise use the default angled position.
