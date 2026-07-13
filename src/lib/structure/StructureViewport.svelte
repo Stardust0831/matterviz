@@ -86,6 +86,9 @@
     camera_projection = `orthographic`,
     camera_position = $bindable([0, 0, 0]),
     camera_target = $bindable(undefined),
+    camera_up = $bindable([0, 1, 0]),
+    camera_zoom = $bindable(undefined),
+    initial_camera_up = $bindable(undefined),
 
     // Edit-mode callbacks
     on_sites_moved = undefined,
@@ -142,6 +145,9 @@
     camera_projection?: CameraProjection
     camera_position?: Vec3
     camera_target?: Vec3
+    camera_up?: Vec3
+    camera_zoom?: number
+    initial_camera_up?: Vec3
     on_sites_moved?: (scene_indices: number[], delta: Vec3) => void
     on_operation_start?: () => void
     on_bond_edit_start?: () => void
@@ -186,6 +192,7 @@
   let rotation_target_ref = $state<Vec3 | undefined>(undefined)
   let initial_computed_zoom = $state<number | undefined>(undefined)
   let camera_is_moving = $state(false)
+  let suppress_camera_change = false
 
   const read_orbit_target = (): Vec3 | undefined => {
     if (!orbit_controls?.target) return
@@ -196,10 +203,59 @@
   const read_camera_position = (): Vec3 | undefined =>
     camera ? [camera.position.x, camera.position.y, camera.position.z] : camera_position
 
+  const read_camera_up = (): Vec3 | undefined => {
+    if (!camera) return camera_up
+    const { x, y, z } = camera.up
+    const length = Math.hypot(x, y, z)
+    return Number.isFinite(length) && length > Number.EPSILON
+      ? [x / length, y / length, z / length]
+      : [0, 1, 0]
+  }
+
+  const read_camera_zoom = (): number | undefined =>
+    camera?.type === `OrthographicCamera` &&
+    Number.isFinite((camera as OrthographicCamera).zoom) &&
+    (camera as OrthographicCamera).zoom > 0
+      ? (camera as OrthographicCamera).zoom
+      : undefined
+
+  // OrbitControls emits `change` for rotation, panning, wheel, touch, damping, and
+  // auto-rotation. This callback is the single synchronization path for live camera state.
+  const sync_camera_pose = (): void => {
+    if (suppress_camera_change) return
+    const pos = read_camera_position()
+    if (!pos) return
+    const target = read_orbit_target()
+    camera_position = pos
+    camera_target = target
+  }
+
+  const sync_camera_state = (): void => {
+    if (suppress_camera_change) return
+    sync_camera_pose()
+    const pos = read_camera_position()
+    if (!pos) return
+    const target = read_orbit_target()
+    const up = read_camera_up()
+    const zoom = read_camera_zoom()
+    report_moved?.(true)
+    if (up) camera_up = up
+    on_camera_move?.({
+      structure,
+      camera_has_moved: true,
+      camera_position: pos,
+      camera_target: target,
+      camera_up: up,
+      camera_zoom: camera_projection === `orthographic` ? zoom : undefined,
+    })
+  }
+
   // Reset this pane's camera. The primary pane is given on_camera_reset, so it also emits.
   function reset_camera() {
+    suppress_camera_change = true
     camera_position = [0, 0, 0]
     camera_target = rotation_target_ref
+    camera_up = initial_camera_up ?? camera_up
     report_moved?.(false)
     if (orbit_controls && camera) {
       if (`reset` in orbit_controls && typeof orbit_controls.reset === `function`) {
@@ -208,40 +264,28 @@
       if (orbit_controls.target && rotation_target_ref) {
         orbit_controls.target.set(...rotation_target_ref)
       }
-      if (`zoom` in camera && initial_computed_zoom !== undefined) {
+      if (camera.type === `OrthographicCamera` && initial_computed_zoom !== undefined) {
         const ortho_camera = camera as OrthographicCamera
         ortho_camera.zoom = initial_computed_zoom
         ortho_camera.updateProjectionMatrix()
+        camera_zoom = initial_computed_zoom
       }
       if (typeof orbit_controls.update === `function`) orbit_controls.update()
       camera_position = read_camera_position() ?? camera_position
       camera_target = read_orbit_target()
+      camera_up = initial_camera_up ?? read_camera_up() ?? camera_up
+      camera_zoom = read_camera_zoom() ?? camera_zoom
     }
-    on_camera_reset?.({ structure, camera_has_moved: false, camera_position, camera_target })
+    suppress_camera_change = false
+    on_camera_reset?.({
+      structure,
+      camera_has_moved: false,
+      camera_position,
+      camera_target,
+      camera_up,
+      camera_zoom: camera_projection === `orthographic` ? camera_zoom : undefined,
+    })
   }
-
-  // Track camera movement: keep camera_target in sync with the orbit controls and emit
-  // on_camera_move (primary pane only) while the controls are active.
-  $effect(() => {
-    if (!camera_is_moving) return
-    report_moved?.(true)
-    const sync = () => {
-      const pos = read_camera_position()
-      if (!pos) return
-      const target = read_orbit_target()
-      camera_position = pos
-      camera_target = target
-      on_camera_move?.({
-        structure,
-        camera_has_moved: true,
-        camera_position: pos,
-        camera_target: target,
-      })
-    }
-    sync()
-    const interval = setInterval(sync, 200)
-    return () => clearInterval(interval)
-  })
 
   // Reset on parent request (reset-all button bumps reset_token for every pane)
   let last_reset_token: number | undefined
@@ -301,6 +345,11 @@
       {...in_grid ? { auto_rotate: 0 } : {}}
       {camera_position}
       {camera_target}
+      bind:camera_up
+      bind:camera_zoom
+      bind:initial_camera_up
+      on_camera_change={sync_camera_state}
+      on_camera_sync={sync_camera_pose}
       {camera_projection}
       {camera_direction}
       {interactive}

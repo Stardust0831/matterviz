@@ -11,6 +11,8 @@ export type ThreltePointerEvent = { point: Vector3; nativeEvent: PointerEvent }
 // Camera/lighting/interaction props shared by all Threlte scene components (BrillouinZoneScene, FermiSurfaceScene, StructureScene, ...)
 export type SceneControlProps = {
   camera_projection?: CameraProjection
+  camera_up?: Vec3 // normalized camera up direction; invalid values fall back to [0, 1, 0]
+  camera_zoom?: number // live orthographic zoom; ignored for perspective projection
   rotation_damping?: number // how quickly rotation comes to rest after mouse release
   max_zoom?: number
   min_zoom?: number
@@ -70,6 +72,7 @@ export function build_orbit_props(opts: {
   auto_rotate: number
   rotation_damping: number
   set_camera_is_moving?: (moving: boolean) => void
+  onchange_extra?: () => void
   onstart_extra?: () => void
 }) {
   const is_ortho = opts.camera_projection === `orthographic`
@@ -94,5 +97,6 @@ export function build_orbit_props(opts: {
       opts.onstart_extra?.()
     },
     onend: () => opts.set_camera_is_moving?.(false),
+    onchange: () => opts.onchange_extra?.(),
   }
 }

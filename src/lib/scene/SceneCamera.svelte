@@ -10,6 +10,7 @@
   let {
     camera_projection = `perspective`,
     position,
+    up = [0, 1, 0],
     fov = DEFAULTS.structure.fov,
     zoom = DEFAULTS.structure.initial_zoom,
     near = undefined,
@@ -20,6 +21,7 @@
   }: {
     camera_projection?: CameraProjection
     position: Vec3 // camera position
+    up?: Vec3 // camera up direction, supplied before OrbitControls construction
     fov?: number // perspective field of view
     zoom?: number // orthographic zoom level
     near?: number // perspective near plane (orthographic always uses -100)
@@ -45,11 +47,11 @@
 {/snippet}
 
 {#if camera_projection === `perspective`}
-  <T.PerspectiveCamera makeDefault {position} {fov} {...persp_planes}>
+  <T.PerspectiveCamera makeDefault {position} {up} {fov} {...persp_planes}>
     {@render camera_contents()}
   </T.PerspectiveCamera>
 {:else}
-  <T.OrthographicCamera makeDefault {position} {zoom} near={-100} {...ortho_far}>
+  <T.OrthographicCamera makeDefault {position} {up} {zoom} near={-100} {...ortho_far}>
     {@render camera_contents()}
   </T.OrthographicCamera>
 {/if}

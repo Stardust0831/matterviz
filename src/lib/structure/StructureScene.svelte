@@ -59,7 +59,7 @@
   import { type ComponentProps, type Snippet, untrack } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { BufferAttribute, BufferGeometry, Color, DoubleSide, Vector3 } from 'three'
-  import type { DirectionalLight, Mesh, Object3D } from 'three'
+  import type { DirectionalLight, Mesh, Object3D, OrthographicCamera } from 'three'
   import Bond from './Bond.svelte'
   import type { BondEditResult, BondingStrategy, BondKeyTarget } from './bonding'
   import {
@@ -105,6 +105,48 @@
     point?: Vector3
   }
 
+  const DEFAULT_CAMERA_UP: Vec3 = [0, 1, 0]
+
+  const normalize_camera_up = (value: unknown): Vec3 => {
+    if (!value || typeof value !== `object`) return [...DEFAULT_CAMERA_UP]
+    const candidate = value as { length?: number; [index: number]: unknown }
+    if (candidate.length !== 3) return [...DEFAULT_CAMERA_UP]
+    let coords: number[]
+    try {
+      coords = [candidate[0], candidate[1], candidate[2]].map(Number)
+    } catch {
+      return [...DEFAULT_CAMERA_UP]
+    }
+    const length = Math.hypot(...coords)
+    if (!coords.every(Number.isFinite) || !Number.isFinite(length) || length <= Number.EPSILON)
+      return [...DEFAULT_CAMERA_UP]
+    return coords.map((coord) => coord / length) as Vec3
+  }
+
+  const valid_camera_zoom = (value: unknown): number | undefined =>
+    typeof value === `number` && Number.isFinite(value) && value > 0 ? value : undefined
+
+  const clamp_camera_zoom = (
+    zoom: number,
+    min_zoom_value?: number,
+    max_zoom_value?: number,
+  ): number => {
+    let clamped = zoom
+    if (
+      typeof min_zoom_value === `number` &&
+      Number.isFinite(min_zoom_value) &&
+      min_zoom_value > 0
+    )
+      clamped = Math.max(min_zoom_value, clamped)
+    if (
+      typeof max_zoom_value === `number` &&
+      Number.isFinite(max_zoom_value) &&
+      max_zoom_value > 0
+    )
+      clamped = Math.min(max_zoom_value, clamped)
+    return clamped
+  }
+
   let {
     structure = undefined,
     base_structure = undefined,
@@ -112,6 +154,8 @@
     same_size_atoms = false,
     camera_position = DEFAULTS.structure.camera_position,
     camera_target = undefined,
+    camera_up = $bindable<Vec3>([...DEFAULT_CAMERA_UP]),
+    camera_zoom = $bindable<number | undefined>(undefined),
     camera_direction = undefined,
     camera_projection = DEFAULTS.structure.camera_projection,
     rotation_damping = DEFAULTS.structure.rotation_damping,
@@ -212,6 +256,7 @@
     orbit_controls = $bindable(),
     rotation_target_ref = $bindable(),
     initial_computed_zoom = $bindable(),
+    initial_camera_up = $bindable(),
     hidden_elements = $bindable(new SvelteSet()),
     hidden_prop_vals = $bindable(new SvelteSet<number | string>()),
     element_radius_overrides = $bindable<Partial<Record<ElementSymbol, number>>>({}),
@@ -227,6 +272,8 @@
     on_operation_start,
     on_bond_edit_start,
     on_add_atom,
+    on_camera_change,
+    on_camera_sync,
     add_atom_mode = $bindable(false),
     add_element = $bindable(`C`),
     cursor = $bindable(`default`),
@@ -249,6 +296,8 @@
     // determined by the atomic radius of the element
     camera_position?: [x: number, y: number, z: number] // initial camera position from which to render the scene
     camera_target?: Vec3 // external orbit-controls target for pan synchronization
+    camera_up?: Vec3 // up direction used to roll the camera around its view axis
+    camera_zoom?: number // live orthographic camera zoom; ignored for perspective projection
     // When set (and camera_position is unset/zero), auto-place the camera along this
     // direction from the structure center (used by the multi-side view for fixed angles)
     camera_direction?: Vec3
@@ -341,6 +390,7 @@
     orbit_controls?: ComponentProps<typeof extras.OrbitControls>[`ref`] // OrbitControls instance
     rotation_target_ref?: Vec3 // Expose rotation target for reset
     initial_computed_zoom?: number // Expose initial zoom for reset
+    initial_camera_up?: Vec3 // Expose initial up direction for reset
     hidden_elements?: Set<ElementSymbol>
     hidden_prop_vals?: Set<number | string> // Track hidden property values (e.g. Wyckoff positions, coordination numbers)
     element_radius_overrides?: Partial<Record<ElementSymbol, number>> // Per-element absolute radius in Angstroms
@@ -365,6 +415,8 @@
     // When false, render the scene without hover/edit raycast helpers. Used by multi-side
     // view so inactive panes skip interaction-only work while the active pane stays editable.
     interactive?: boolean
+    on_camera_change?: () => void // Internal camera change synchronization callback
+    on_camera_sync?: () => void // Internal pre-rekey pose preservation callback
   } = $props()
 
   const pulse = create_pulse_animation(
@@ -376,6 +428,65 @@
   bind_renderer((threlte_scene, threlte_camera) => {
     scene = threlte_scene
     camera = threlte_camera
+  })
+
+  let canonical_camera_up = $derived(normalize_camera_up(camera_up))
+  let camera_up_key = $derived(canonical_camera_up.join(`,`))
+
+  let previous_camera_up_key: string | undefined
+  $effect.pre(() => {
+    const current_key = camera_up_key
+    if (previous_camera_up_key !== undefined && previous_camera_up_key !== current_key) {
+      // Preserve the live pose on this component before the keyed camera subtree is replaced.
+      // StructureViewport mirrors the same pose into the primary bindable state below.
+      if (camera) camera_position = [camera.position.x, camera.position.y, camera.position.z]
+      if (orbit_controls?.target) {
+        const { x, y, z } = orbit_controls.target
+        camera_target = [x, y, z]
+      }
+      on_camera_sync?.()
+    }
+    previous_camera_up_key = current_key
+  })
+
+  // Camera state is declarative, but the active Three camera remains the source of truth for
+  // orientation and zoom after OrbitControls moves. Normalize external values before applying
+  // them so malformed inputs cannot produce a zero, NaN, or infinite camera basis.
+  $effect(() => {
+    const normalized_up = canonical_camera_up
+    if (
+      !Array.isArray(camera_up) ||
+      camera_up.length !== 3 ||
+      camera_up.some((coord, idx) => coord !== normalized_up[idx])
+    )
+      camera_up = normalized_up
+
+    const normalized_zoom = valid_camera_zoom(camera_zoom)
+    if (camera_zoom !== undefined && normalized_zoom === undefined) camera_zoom = undefined
+    else if (normalized_zoom !== undefined) {
+      const canonical_zoom = clamp_camera_zoom(normalized_zoom, min_zoom, max_zoom)
+      if (camera_zoom !== canonical_zoom) camera_zoom = canonical_zoom
+    }
+    const effective_zoom =
+      camera_projection === `orthographic`
+        ? clamp_camera_zoom(
+            valid_camera_zoom(camera_zoom) ?? auto_computed_zoom,
+            min_zoom,
+            max_zoom,
+          )
+        : undefined
+
+    if (!camera) return
+    const ortho_camera =
+      camera.type === `OrthographicCamera` ? (camera as OrthographicCamera) : undefined
+    if (
+      ortho_camera &&
+      effective_zoom !== undefined &&
+      ortho_camera.zoom !== effective_zoom
+    ) {
+      ortho_camera.zoom = effective_zoom
+      ortho_camera.updateProjectionMatrix()
+    }
   })
 
   let key_light = $state<DirectionalLight>()
@@ -428,11 +539,14 @@
 
   // Track initial computed zoom for reset
   let stored_initial_zoom = $state<number | undefined>(undefined)
+  let stored_initial_up = $state<Vec3 | undefined>(undefined)
   $effect(() => {
     if (stored_initial_zoom === undefined && computed_zoom > 0) {
       stored_initial_zoom = computed_zoom
     }
     initial_computed_zoom = stored_initial_zoom
+    if (stored_initial_up === undefined) stored_initial_up = [...canonical_camera_up]
+    initial_camera_up = stored_initial_up
   })
 
   let atom_tooltip_active = $state(false)
@@ -1058,8 +1172,9 @@
   let camera_near = $derived(Math.max(0.01, structure_size * 0.01))
   let camera_far = $derived(Math.max(1000, structure_size * 100))
 
-  // Using $state because this is mutated in an effect based on viewport/structure size
-  let computed_zoom = $state(untrack(() => initial_zoom))
+  // Using $state because this is mutated in an effect based on viewport/structure size.
+  // An explicit camera_zoom is layered on top below and never changes this auto-framing value.
+  let auto_computed_zoom = $state(untrack(() => initial_zoom))
   // structure_size is read untracked so structure changes don't re-zoom the user's view;
   // zoom only re-frames on a genuine viewport resize. Skip same-value width/height
   // re-fires (a wrapping component can transiently re-emit clientWidth/Height during a
@@ -1078,8 +1193,20 @@
     let new_zoom = initial_zoom * scale_factor
     if (min_zoom && min_zoom > 0) new_zoom = Math.max(min_zoom, new_zoom)
     if (max_zoom && max_zoom > 0) new_zoom = Math.min(max_zoom, new_zoom)
-    computed_zoom = new_zoom
+    auto_computed_zoom = new_zoom
   })
+
+  // An explicit camera_zoom overrides automatic viewport framing only while it is valid and
+  // the active projection is orthographic. Perspective cameras keep their own zoom untouched.
+  let computed_zoom = $derived(
+    camera_projection === `orthographic`
+      ? clamp_camera_zoom(
+          valid_camera_zoom(camera_zoom) ?? auto_computed_zoom,
+          min_zoom,
+          max_zoom,
+        )
+      : auto_computed_zoom,
+  )
 
   $effect.pre(() => {
     // Simple initial camera auto-position: proportional to structure size and fov
@@ -1774,6 +1901,7 @@
       auto_rotate,
       rotation_damping,
       set_camera_is_moving: (moving) => (camera_is_moving = moving),
+      onchange_extra: on_camera_change,
       // Close hover tooltips + bond context menu while the camera moves. Only hide the
       // VISIBLE menu (not bond_context_target): clicking a menu button fires this
       // orbit-controls start handler before the button's own handler runs, which still
@@ -1887,17 +2015,20 @@
   {/if}
 {/snippet}
 
-<SceneCamera
-  {camera_projection}
-  position={camera_position}
-  {fov}
-  zoom={computed_zoom}
-  near={camera_near}
-  far={camera_far}
-  orbit_props={orbit_controls_props}
-  {gizmo}
-  bind:orbit_controls
-/>
+{#key camera_up_key}
+  <SceneCamera
+    {camera_projection}
+    position={camera_position}
+    up={canonical_camera_up}
+    {fov}
+    zoom={computed_zoom}
+    near={camera_near}
+    far={camera_far}
+    orbit_props={orbit_controls_props}
+    {gizmo}
+    bind:orbit_controls
+  />
+{/key}
 
 <T.Object3D bind:ref={light_target} />
 <T.DirectionalLight bind:ref={key_light} intensity={directional_light} />

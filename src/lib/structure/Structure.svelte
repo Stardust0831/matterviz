@@ -100,7 +100,11 @@
 
   // Local reactive state for scene and lattice props. Deeply reactive so nested mutations propagate.
   // Deep-clone to prevent mutations from leaking to global defaults across component instances.
-  let scene_props = $state(structuredClone(DEFAULTS.structure) as SceneProps)
+  let scene_props = $state({
+    ...structuredClone(DEFAULTS.structure),
+    camera_up: [0, 1, 0] as Vec3,
+    camera_zoom: undefined,
+  } as SceneProps)
   let lattice_props = $state({
     cell_edge_opacity: DEFAULTS.structure.cell_edge_opacity,
     cell_surface_opacity: DEFAULTS.structure.cell_surface_opacity,
@@ -980,6 +984,7 @@
       if (site_radius_overrides?.size > 0) site_radius_overrides.clear()
       // Clear stale camera target so orbit controls re-center on the new cell
       scene_props.camera_target = undefined
+      scene_props.camera_zoom = undefined
     })
   })
 
@@ -1019,6 +1024,7 @@
   // handling (move tracking, reset, re-framing) lives in StructureViewport.
   let scene = $state<Scene | undefined>(undefined)
   let camera = $state<Camera | undefined>(undefined)
+  let initial_camera_up = $state<Vec3 | undefined>(undefined)
 
   // Multi-side view state: index of the pane the pointer is over (gets edit interactions),
   // a token bumped to reset every pane, and the set of panes whose camera has moved (so
@@ -1084,6 +1090,7 @@
     // Side panes reset their local camera state in StructureViewport's structure effect.
     scene_props.camera_target = undefined
     scene_props.camera_position = [0, 0, 0]
+    scene_props.camera_zoom = undefined
   }
 
   // Reset every pane's camera (each StructureViewport resets on a reset_token bump and,
@@ -1928,6 +1935,9 @@
         camera_projection={view.projection ?? scene_props.camera_projection}
         bind:camera_position={scene_props.camera_position}
         bind:camera_target={scene_props.camera_target}
+        bind:camera_up={scene_props.camera_up}
+        bind:camera_zoom={scene_props.camera_zoom}
+        bind:initial_camera_up
         bind:scene
         bind:camera
         bind:selected_sites
