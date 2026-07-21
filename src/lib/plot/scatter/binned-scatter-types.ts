@@ -24,6 +24,10 @@ export const DEFAULT_BINNED_SIZE_SCALE: BinnedSizeScaleConfig = {
 export type BinnedDensityConfig = {
   bin_px?: number
   color_scale?: BinnedColorScaleConfig
+  /** Scientific value used for color. Bin population remains available for opacity. */
+  color_by?: `count` | `x` | `y`
+  /** Optional value-to-color function, evaluated after clamping to value_range. */
+  color_fn?: (value: number) => string
   color_bar?: ComponentProps<typeof ColorBar> | null
   auto_point_mode?: false | { max_points?: number; max_points_per_px?: number }
   bin_click?: `zoom` | `point` | `none`

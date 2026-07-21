@@ -1,6 +1,7 @@
 import type { Vec2 } from '$lib/math'
 import {
   build_pick_index,
+  bin_center_value,
   bin_points,
   density_bin_at_point,
   first_point_in_bin,
@@ -60,6 +61,14 @@ describe(`adaptive density utilities`, () => {
     expect(should_render_points(10_000, 300 * 300, 25_000, 0.12)).toBe(true)
     expect(should_render_points(30_000, 300 * 300, 25_000, 0.5)).toBe(true)
     expect(should_render_points(30_000, 300 * 300, 25_000, 0.12)).toBe(false)
+  })
+
+  it(`returns density bin centers in linear and transformed data coordinates`, () => {
+    expect(bin_center_value(0, 2, [0, 4])).toBe(1)
+    expect(bin_center_value(1, 2, [0, 4])).toBe(3)
+    const log = scale_bin_transform(`log`)
+    expect(bin_center_value(0, 2, [1, 100], log)).toBeCloseTo(Math.sqrt(10))
+    expect(bin_center_value(1, 2, [1, 100], log)).toBeCloseTo(Math.sqrt(1000))
   })
 
   const pick_options = {

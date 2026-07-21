@@ -371,6 +371,41 @@ describe(`BinnedScatterPlot`, () => {
     expect(tick_by_label).toMatchObject({ '1': `0%`, '10': `50%`, '100': `100%` })
   })
 
+  test(`colors both point and density modes by a scientific axis value`, async () => {
+    const colors_for = async (mode: `points` | `density`) => {
+      const fill_styles: string[] = []
+      const ctx = mock_canvas_context()
+      Object.defineProperty(ctx, `fillStyle`, {
+        get: () => fill_styles.at(-1) ?? ``,
+        set: (value: string) => void fill_styles.push(value),
+      })
+      mount_plot({
+        series: [{ x: [-0.04, 0.02], y: [0.5, 0.5] }],
+        density: {
+          ...density_mode_with_colorbar({
+            color_by: `x`,
+            color_fn: (value) => (value < -0.01 ? `blue` : `red`),
+            color_scale: { value_range: [-0.04, 0.02] },
+            color_bar: { title: `sign(lambda2)rho` },
+            bin_px: 300,
+          }),
+          auto_point_mode:
+            mode === `points` ? { max_points: Number.MAX_SAFE_INTEGER } : density_thresholds,
+        },
+        style: `width: 800px; height: 600px`,
+        x_axis: { range: [-0.04, 0.02] },
+        y_axis: { range: [0, 1] },
+      })
+      await settle()
+      return fill_styles
+    }
+
+    expect(await colors_for(`points`)).toEqual(expect.arrayContaining([`blue`, `red`]))
+    document.body.replaceChildren()
+    expect(await colors_for(`density`)).toEqual(expect.arrayContaining([`blue`, `red`]))
+    expect(document.querySelector(`.colorbar .label`)?.textContent).toBe(`sign(lambda2)rho`)
+  })
+
   test(`skips non-finite coordinates in point rendering`, async () => {
     const arc = vi.fn((x: number, y: number, radius: number) => {
       expect(Number.isFinite(x)).toBe(true)

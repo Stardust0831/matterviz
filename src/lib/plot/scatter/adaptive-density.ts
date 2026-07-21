@@ -226,6 +226,21 @@ export function bin_points(
   }
 }
 
+/** Center of a density bin in data coordinates, including nonlinear axes. */
+export function bin_center_value(
+  bin_idx: number,
+  bin_count: number,
+  range: Vec2,
+  transform?: BinTransform,
+): number {
+  const [min, max] = range_bounds(range)
+  const forward = transform?.forward ?? identity.forward
+  const inverse = transform?.inverse ?? identity.inverse
+  const t_min = forward(min)
+  const t_max = forward(max)
+  return inverse(t_min + ((bin_idx + 0.5) / Math.max(1, bin_count)) * (t_max - t_min))
+}
+
 export function density_bin_at_point(
   density: DensityBinResult,
   pointer: Point2D,

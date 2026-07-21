@@ -38,6 +38,7 @@
     reserve_marginal_pad,
   } from '$lib/plot/core/marginals'
   import {
+    bin_center_value,
     build_pick_index,
     bin_points,
     density_bin_at_point,
@@ -200,6 +201,8 @@
   let density_settings = $derived({
     bin_px: density_config.bin_px ?? 2.8,
     color_scale: density_config.color_scale ?? SCALE_DEFAULTS.color,
+    color_by: density_config.color_by ?? `count`,
+    color_fn: density_config.color_fn,
     color_bar:
       density_config.color_bar === undefined
         ? default_density_color_bar
@@ -332,11 +335,38 @@
   )
   const bin_at = (coords: Point2D) =>
     density_bin_at_point(density_result, coords, plot_rect, x_range, y_range, bin_transforms)
-  let auto_color_range = $derived<Vec2>([1, Math.max(1, density_result.max_count)])
-  let color_scale_fn = $derived(
-    create_color_scale(density_settings.color_scale, auto_color_range),
+  let auto_color_range = $derived<Vec2>(
+    density_settings.color_by === `x`
+      ? range_bounds(x_range)
+      : density_settings.color_by === `y`
+        ? range_bounds(y_range)
+        : [1, Math.max(1, density_result.max_count)],
   )
-  let hovered_bin_color = $derived(hovered_bin ? color_scale_fn(hovered_bin.count) : undefined)
+  let color_value_range = $derived<Vec2>(
+    (typeof density_settings.color_scale === `string`
+      ? undefined
+      : density_settings.color_scale.value_range) ?? auto_color_range,
+  )
+  let base_color_scale_fn = $derived(
+    density_settings.color_fn ??
+      create_color_scale(density_settings.color_scale, color_value_range),
+  )
+  const color_scale_fn = (value: number): string => {
+    const [low, high] = range_bounds(color_value_range)
+    return base_color_scale_fn(Math.max(low, Math.min(high, value)))
+  }
+  const bin_color_value = (x_bin: number, y_bin: number, count: number): number => {
+    if (density_settings.color_by === `x`) {
+      return bin_center_value(x_bin, density_result.x_bins, x_range, bin_transforms.x)
+    }
+    if (density_settings.color_by === `y`) {
+      return bin_center_value(y_bin, density_result.y_bins, y_range, bin_transforms.y)
+    }
+    return count
+  }
+  const density_bin_color = (bin: DensityBin): string =>
+    color_scale_fn(bin_color_value(bin.x_bin, bin.y_bin, bin.count))
+  let hovered_bin_color = $derived(hovered_bin ? density_bin_color(hovered_bin) : undefined)
   let color_scale_type = $derived(
     typeof density_settings.color_scale === `string`
       ? undefined
@@ -348,7 +378,10 @@
     return {
       ...color_bar,
       scale_type: color_bar.scale_type ?? color_scale_type,
-      title: `${color_bar.title ?? `Density`} (${density_result.visible_count.toLocaleString()} points)`,
+      title:
+        density_settings.color_by === `count`
+          ? `${color_bar.title ?? `Density`} (${density_result.visible_count.toLocaleString()} points)`
+          : (color_bar.title ?? density_settings.color_by),
       tick_format: color_bar.tick_format ?? `.2~s`,
       tick_labels: color_bar.tick_labels ?? 4,
       tick_side: color_bar.tick_side ?? `primary`,
@@ -534,24 +567,31 @@
   function draw_density(ctx: CanvasRenderingContext2D) {
     const bin_w = plot_width / density_result.x_bins
     const bin_h = plot_height / density_result.y_bins
-    const style_cache = new Map<number, { fill: string; alpha: number }>()
+    const fill_cache = new Map<number, string>()
+    const alpha_cache = new Map<number, number>()
     for (let y_bin = 0; y_bin < density_result.y_bins; y_bin++) {
       for (let x_bin = 0; x_bin < density_result.x_bins; x_bin++) {
         const count = density_result.counts[y_bin * density_result.x_bins + x_bin]
         if (!count) continue
-        let style = style_cache.get(count)
-        if (!style) {
-          style = {
-            fill: color_scale_fn(count),
-            alpha: Math.min(
-              0.95,
-              0.2 + Math.log1p(count) / Math.log1p(density_result.max_count),
-            ),
-          }
-          style_cache.set(count, style)
+        const color_value = bin_color_value(x_bin, y_bin, count)
+        const color_key =
+          density_settings.color_by === `x`
+            ? x_bin
+            : density_settings.color_by === `y`
+              ? y_bin
+              : count
+        let fill = fill_cache.get(color_key)
+        if (!fill) fill_cache.set(color_key, (fill = color_scale_fn(color_value)))
+        let alpha = alpha_cache.get(count)
+        if (alpha === undefined) {
+          alpha = Math.min(
+            0.95,
+            0.2 + Math.log1p(count) / Math.log1p(density_result.max_count),
+          )
+          alpha_cache.set(count, alpha)
         }
-        ctx.fillStyle = style.fill
-        ctx.globalAlpha = style.alpha
+        ctx.fillStyle = fill
+        ctx.globalAlpha = alpha
         ctx.fillRect(
           pad.l + x_bin * bin_w,
           pad.t + (density_result.y_bins - y_bin - 1) * bin_h,
@@ -568,7 +608,6 @@
     const [y_min, y_max] = range_bounds(y_range)
     const pulse = selected_pulse.unit
     for (const [series_idx, srs] of series.entries()) {
-      ctx.fillStyle = srs.color ?? get_series_color(series_idx)
       const n_points = Math.min(srs.x.length, srs.y.length)
       for (let point_idx = 0; point_idx < n_points; point_idx++) {
         const x = srs.x[point_idx]
@@ -577,6 +616,12 @@
         if (x < x_min || x > x_max || y < y_min || y > y_max) continue
         const cx = x_scale_fn(x)
         const cy = y_scale_fn(y)
+        ctx.fillStyle =
+          density_settings.color_by === `x`
+            ? color_scale_fn(x)
+            : density_settings.color_by === `y`
+              ? color_scale_fn(y)
+              : (srs.color ?? get_series_color(series_idx))
         const point_id = srs.point_ids?.[point_idx]
         const is_selected = selected_point_id != null && point_id === selected_point_id
         const radius = point_radius_for_value(srs.size_values?.[point_idx])
@@ -650,7 +695,11 @@
   })
 
   const point_color = (point: DenseInternalPoint<Metadata>): string =>
-    series[point.series_idx]?.color ?? get_series_color(point.series_idx)
+    density_settings.color_by === `x`
+      ? color_scale_fn(point.x)
+      : density_settings.color_by === `y`
+        ? color_scale_fn(point.y)
+        : (series[point.series_idx]?.color ?? get_series_color(point.series_idx))
 
   const point_label_key = (point: DenseInternalPoint<Metadata>): string =>
     `${point.series_idx}-${point.point_idx}`
@@ -863,7 +912,7 @@
       if (bin.count > 1 && density_settings.bin_click !== `point`) return
 
       const point = first_point_in_bin(series, density_result, bin, x_scale_fn, y_scale_fn)
-      if (point) emit_point_click(point, event, color_scale_fn(bin.count))
+      if (point) emit_point_click(point, event, density_bin_color(bin))
       return
     }
 
@@ -1095,8 +1144,8 @@
       <ColorBar
         {...color_bar_props}
         {color_scale_fn}
-        color_scale_domain={auto_color_range}
-        range={auto_color_range}
+        color_scale_domain={color_value_range}
+        range={color_value_range}
       />
     </div>
   {/if}
