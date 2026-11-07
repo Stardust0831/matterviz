@@ -36,6 +36,8 @@
     tiling = [1, 1, 1],
     on_error,
     building = $bindable(false),
+    geometry_error = $bindable<string | undefined>(),
+    geometry_revision = $bindable(0),
   }: {
     volumes?: VolumetricData[]
     settings?: IsosurfaceSettings
@@ -46,11 +48,17 @@
     // (output) true from a geometry rebuild's request until its surfaces are swapped in,
     // so a scene snapshot can wait for them (large grids mesh in a worker)
     building?: boolean
+    // Completion is successful only when building is false and geometry_error is absent.
+    geometry_error?: string
+    geometry_revision?: number
   } = $props()
 
   // Context is read once at init: Structure registers its handler before the scene mounts
   const context_on_error = get_isosurface_error_handler()
-  const report_error = (message: string): void => (on_error ?? context_on_error)?.(message)
+  const report_error = (message: string): void => {
+    geometry_error = message || undefined
+    ;(on_error ?? context_on_error)?.(message)
+  }
 
   // In-place geometry/colour updates bypass the <T> props Threlte watches, so on-demand
   // rendering needs an explicit invalidate to repaint
@@ -166,6 +174,7 @@
     cancel_geometry_worker()
     for (const entry of active_entries) entry.geometry.dispose()
     active_entries = []
+    geometry_error = undefined
     colored_keys.clear()
   }
 
@@ -280,6 +289,8 @@
     layers: ResolvedLayer[],
     generation: number,
   ): Promise<void> {
+    // A queued rebuild may follow a failed worker request for older settings.
+    report_error(``)
     const profile_start = performance.now()
     let cache_hits = 0
     // Reuse geometries whose signature is unchanged (take-once so duplicate
@@ -462,6 +473,10 @@
 
   $effect(() => {
     void geo_sig
+    untrack(() => {
+      geometry_revision++
+      report_error(``)
+    })
     if (untrack(() => volumes.length) === 0) {
       untrack(reset_surfaces)
       return
