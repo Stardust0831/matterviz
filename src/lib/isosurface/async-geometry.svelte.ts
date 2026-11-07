@@ -23,6 +23,7 @@ export const compute_geometries_async = create_worker_client<
     admit_geometry_input(input)
     return {
       memory_budget_bytes: input.memory_budget_bytes,
+      grid_quality: input.grid_quality,
       volumes: input.volumes.map((job) => ({
         token: job.token,
         volume: {

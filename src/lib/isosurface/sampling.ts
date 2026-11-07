@@ -6,7 +6,7 @@ import type { Matrix3x3, Vec2, Vec3 } from '#lib/math.js'
 import { reciprocal_lattice, scale_lattice_matrix } from '#lib/math.js'
 import { clamp01 } from '#lib/utils.js'
 import { lower_corner, type ScalarGrid3D, upper_corner } from './grid'
-import type { VolumeGrid, VolumetricData } from './types'
+import type { IsosurfaceGridQuality, VolumeGrid, VolumetricData } from './types'
 import { grid_data_range, MAX_GRID_POINTS } from './types'
 
 // Preserve the rounding of ((frac % 1) + 1) % 1 while avoiding remainder operations
@@ -462,14 +462,20 @@ export function prepare_geometry_grid(
   volume: VolumeGrid,
   range: DisplayRange | null,
   memory?: GeometryMemoryBudget,
+  quality: IsosurfaceGridQuality = `preview`,
 ): { grid: ScalarGrid3D<Float64Array>; lattice: Matrix3x3; origin: Vec3 } {
   const { values, dims, lattice, origin, periodic } = volume
-  if (!range && !periodic && values.length <= MAX_GRID_POINTS && dims.every((dim) => dim >= 2))
+  if (
+    !range &&
+    !periodic &&
+    (quality === `source` || values.length <= MAX_GRID_POINTS) &&
+    dims.every((dim) => dim >= 2)
+  )
     return { grid: volume, lattice, origin }
   const extracted = extract_volume_range(
     volume,
     range ?? UNIT_CELL_RANGE,
-    MAX_GRID_POINTS,
+    quality === `source` ? Infinity : MAX_GRID_POINTS,
     memory,
   )
   return { grid: extracted, lattice: extracted.lattice, origin: extracted.origin }

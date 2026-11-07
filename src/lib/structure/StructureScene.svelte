@@ -7,7 +7,11 @@
   import type { ElementSymbol } from '#lib/element/index.js'
   import Isosurface from '#lib/isosurface/Isosurface.svelte'
   import SlicePlane from '#lib/isosurface/SlicePlane.svelte'
-  import type { IsosurfaceSettings, VolumetricData } from '#lib/isosurface/types.js'
+  import type {
+    IsosurfaceGridInfo,
+    IsosurfaceSettings,
+    VolumetricData,
+  } from '#lib/isosurface/types.js'
   import { DEFAULT_ISOSURFACE_SETTINGS } from '#lib/isosurface/types.js'
   import type { Vec2, Vec3 } from '#lib/math.js'
   import * as math from '#lib/math.js'
@@ -281,7 +285,9 @@
       .trajectory_line_wrap_mode as TrajectoryLineWrapMode,
     trajectory_lines_emphasis = false,
     trajectory_lines_result = $bindable(null),
+    isosurface_grid_info = $bindable([]),
   }: SceneControlProps & {
+    isosurface_grid_info?: IsosurfaceGridInfo[]
     structure?: AnyStructure
     render_token?: unknown
     on_rendered?: (token: unknown) => void
@@ -453,19 +459,27 @@
   let isosurfaces_building = $state(false)
   let isosurface_geometry_error = $state<string>()
   let isosurface_geometry_revision = $state(0)
+  let capture_source = $state(false)
   let capture_in_progress = false
   const capture = new SceneCapture()
   onDestroy(() => capture.close())
+  const render_isosurface_settings = $derived(
+    capture_source && isosurface_settings
+      ? { ...isosurface_settings, grid_quality: `source` as const }
+      : isosurface_settings,
+  )
 
   async function prepare_capture(signal: AbortSignal): Promise<() => void> {
     if (capture_in_progress) throw new Error(`An image export is already in progress`)
     capture_in_progress = true
     const restore = () => {
+      capture_source = false
       capture_in_progress = false
       threlte.invalidate()
     }
     try {
-      // Flush pending settings so building/revision describe the requested geometry.
+      capture_source = true
+      // Flush the quality change so building/revision describe the requested geometry.
       await tick()
       const ready = capture.wait(isosurface_geometry_revision, signal)
       threlte.invalidate()
@@ -1858,11 +1872,12 @@
       {#if volumetric_data && isosurface_settings}
         <Isosurface
           volumes={volumetric_data}
-          settings={isosurface_settings}
+          settings={render_isosurface_settings}
           tiling={supercell_tiling}
           bind:building={isosurfaces_building}
           bind:geometry_error={isosurface_geometry_error}
           bind:geometry_revision={isosurface_geometry_revision}
+          bind:grid_info={isosurface_grid_info}
         />
       {/if}
       <SlicePlane polygon={slice_polygon} />

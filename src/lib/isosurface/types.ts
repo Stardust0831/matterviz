@@ -164,7 +164,19 @@ export interface IsosurfaceLayer {
 }
 
 // Every rendered surface is an explicit layer (none renders nothing), plus shared options
+export type IsosurfaceGridQuality = `preview` | `source`
+
+export interface IsosurfaceGridInfo {
+  volume_id: string
+  quality: IsosurfaceGridQuality
+  source_dims: Vec3
+  effective_dims: Vec3
+}
+
 export interface IsosurfaceSettings {
+  // Preview retains the existing 500k-point limit. Source retains voxel density,
+  // including endpoint samples for periodic display windows; independent of memory admission.
+  grid_quality?: IsosurfaceGridQuality
   // Optional admission limit for retained geometry plus an extraction's CPU typed buffers.
   // Source arrays owned by the application and GPU allocations are outside this limit.
   geometry_memory_budget_bytes?: number
@@ -210,6 +222,7 @@ export const MAX_GRID_POINTS = 500_000
 
 // Default isosurface rendering settings (no layers: nothing renders until a volume adds one)
 export const DEFAULT_ISOSURFACE_SETTINGS: IsosurfaceSettings = {
+  grid_quality: `preview`,
   layers: [],
   wireframe: false,
   halo: 0,

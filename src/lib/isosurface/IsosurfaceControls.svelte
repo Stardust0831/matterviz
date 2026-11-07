@@ -16,7 +16,12 @@
   import { auto_color_config, ISO_COLORMAP_SELECT_PROPS } from './coloring'
   import type { DisplayRange } from './sampling'
   import { compare_volume_grids, UNIT_CELL_RANGE } from './sampling'
-  import type { IsosurfaceLayer, IsosurfaceSettings, VolumetricData } from './types'
+  import type {
+    IsosurfaceGridInfo,
+    IsosurfaceLayer,
+    IsosurfaceSettings,
+    VolumetricData,
+  } from './types'
   import {
     auto_isosurface_settings,
     auto_volume_layer,
@@ -34,10 +39,12 @@
     settings = $bindable({ ...DEFAULT_ISOSURFACE_SETTINGS }),
     volumes = $bindable([]),
     active_volume_id = $bindable<string | undefined>(),
+    grid_info = [],
   }: {
     settings?: IsosurfaceSettings
     volumes?: VolumetricData[]
     active_volume_id?: string
+    grid_info?: IsosurfaceGridInfo[]
   } = $props()
 
   // Preserve the selected field while it exists; select the first remaining field on removal.
@@ -382,6 +389,26 @@
       bind:checked={() => settings.wireframe, (wireframe) => update_settings({ wireframe })}
     />
   </label>
+
+  <label>
+    <span>Grid quality</span>
+    <select
+      aria-label="Grid quality"
+      value={settings.grid_quality ?? `preview`}
+      onchange={(event) =>
+        update_settings({ grid_quality: event.currentTarget.value as `preview` | `source` })}
+    >
+      <option value="preview">Preview (up to 500k points)</option>
+      <option value="source">Original grid</option>
+    </select>
+  </label>
+  {#each grid_info as info (info.volume_id)}
+    <div class="grid-info">
+      {volume_by_id.get(info.volume_id)?.label ?? info.volume_id}:
+      {info.source_dims.join(` × `)} → {info.effective_dims.join(` × `)}
+      ({info.quality === `source` ? `Original grid` : `Preview`})
+    </div>
+  {/each}
 
   <!-- Surfaces grouped under their geometry-source volume -->
   {#each grouped_layers as { vol_idx, entries } (vol_idx)}
