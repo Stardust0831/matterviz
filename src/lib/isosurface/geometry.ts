@@ -6,7 +6,7 @@ import { marching_cubes } from '#lib/marching-cubes.js'
 import type { Matrix3x3, Vec3 } from '#lib/math.js'
 import type { ScalarGrid3D } from './grid'
 import { type DisplayRange, prepare_geometry_grid } from './sampling'
-import type { VolumeGrid } from './types'
+import type { IsosurfaceGridQuality, VolumeGrid } from './types'
 
 export interface GeometryVolumeJob {
   token: number
@@ -19,6 +19,7 @@ export interface GeometryInput {
   // Request working set: inputs (copied in a worker), preparation, scratch and outputs.
   // Callers deduct their resident scene buffers before supplying this optional limit.
   memory_budget_bytes?: number
+  grid_quality?: IsosurfaceGridQuality
   volumes: GeometryVolumeJob[]
 }
 
@@ -61,7 +62,12 @@ export function compute_isosurface_geometries(input: GeometryInput): GeometryRes
   const volumes = input.volumes.map((job): GeometryVolumeResult => {
     const prepare_start = performance.now()
     // An endpoint-inclusive grid (a periodic cell gains its wrap-around samples)
-    const { grid, lattice, origin } = prepare_geometry_grid(job.volume, job.range, memory)
+    const { grid, lattice, origin } = prepare_geometry_grid(
+      job.volume,
+      job.range,
+      memory,
+      input.grid_quality,
+    )
     const prepare_geometry_ms = performance.now() - prepare_start
     const surfaces = job.surfaces.map(({ token, isovalue }): GeometrySurfaceResult => {
       const marching_start = performance.now()

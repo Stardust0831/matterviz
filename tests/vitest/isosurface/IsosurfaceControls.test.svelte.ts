@@ -594,3 +594,14 @@ describe(`IsosurfaceControls multi-volume`, () => {
     ).toBe(reset_visible)
   })
 })
+
+test(`grid quality is explicit and independent of the memory limit`, () => {
+  const props = mount_controls({
+    settings: { ...DEFAULT_ISOSURFACE_SETTINGS, geometry_memory_budget_bytes: 12345 },
+  })
+  const select = doc_query<HTMLSelectElement>(`select[aria-label="Grid quality"]`)
+  expect(select.value).toBe(`preview`)
+  change_value(select, `source`)
+  expect(props.settings.grid_quality).toBe(`source`)
+  expect(props.settings.geometry_memory_budget_bytes).toBe(12345)
+})

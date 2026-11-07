@@ -27,7 +27,12 @@
     resolve_volume_display_range,
     sample_volume_at_positions,
   } from './sampling'
-  import type { IsosurfaceLayer, IsosurfaceSettings, VolumetricData } from './types'
+  import type {
+    IsosurfaceGridInfo,
+    IsosurfaceLayer,
+    IsosurfaceSettings,
+    VolumetricData,
+  } from './types'
   import { DEFAULT_ISOSURFACE_SETTINGS, MAX_GRID_POINTS, index_volumes } from './types'
 
   let {
@@ -38,6 +43,7 @@
     building = $bindable(false),
     geometry_error = $bindable<string | undefined>(),
     geometry_revision = $bindable(0),
+    grid_info = $bindable([]),
   }: {
     volumes?: VolumetricData[]
     settings?: IsosurfaceSettings
@@ -51,6 +57,8 @@
     // Completion is successful only when building is false and geometry_error is absent.
     geometry_error?: string
     geometry_revision?: number
+    // Successfully prepared grids currently displayed, including cached results.
+    grid_info?: IsosurfaceGridInfo[]
   } = $props()
 
   // Context is read once at init: Structure registers its handler before the scene mounts
@@ -105,7 +113,7 @@
   const prepared_cache = new WeakMap<VolumetricData, PreparedGrid>()
 
   const range_key = (vol: VolumetricData): string =>
-    effective_range(vol)?.flat().join(`,`) ?? ``
+    value_key([effective_range(vol), settings.grid_quality ?? `preview`])
 
   const current_prepared = (vol: VolumetricData): PreparedGrid | undefined => {
     const cached = prepared_cache.get(vol)
@@ -175,6 +183,7 @@
     for (const entry of active_entries) entry.geometry.dispose()
     active_entries = []
     geometry_error = undefined
+    grid_info = []
     colored_keys.clear()
   }
 
@@ -216,7 +225,7 @@
     const points = range
       ? range_sample_counts(vol, range).reduce((total, count) => total * count, 1)
       : vol.values.length
-    return Math.min(points, MAX_GRID_POINTS)
+    return settings.grid_quality === `source` ? points : Math.min(points, MAX_GRID_POINTS)
   }
 
   // Large grids that still need preparing go to the geometry worker; small ones and
@@ -226,7 +235,7 @@
     can_create_worker() &&
     pending.some(
       (surface) =>
-        !current_prepared(surface.volume) &&
+        (settings.grid_quality === `source` || !current_prepared(surface.volume)) &&
         estimated_prepared_points(surface.volume) >= 200_000,
     )
 
@@ -346,7 +355,11 @@
         resident.add(prepared.grid.values.buffer)
     }
     memory.reserve([...resident].reduce((total, buffer) => total + buffer.byteLength, 0))
-    const input = { volumes: jobs, memory_budget_bytes: memory.limit - memory.used }
+    const input = {
+      volumes: jobs,
+      memory_budget_bytes: memory.limit - memory.used,
+      grid_quality: settings.grid_quality,
+    }
     if (use_geometry_worker(pending)) {
       const abort = new AbortController()
       geometry_job = { abort, volumes: new Set(pending.map(({ volume }) => volume)) }
@@ -410,6 +423,25 @@
       if (entry.geometry.getAttribute(`color`)) colored_keys.add(entry.key)
     }
     active_entries = entries
+    grid_info = [
+      ...new Set(
+        layers
+          .filter((layer) => layer.visible && Number.isFinite(layer.isovalue))
+          .map(({ volume }) => volume),
+      ),
+    ].flatMap((volume): IsosurfaceGridInfo[] => {
+      const prepared = current_prepared(volume)
+      return prepared
+        ? [
+            {
+              volume_id: volume.id,
+              quality: input.grid_quality ?? `preview`,
+              source_dims: [...volume.dims],
+              effective_dims: [...prepared.grid.dims],
+            },
+          ]
+        : []
+    })
     let [vertices, triangles, buffer_bytes] = [0, 0, 0]
     for (const entry of entries) {
       vertices += entry.geometry.getAttribute(`position`).count

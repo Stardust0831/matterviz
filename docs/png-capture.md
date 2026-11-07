@@ -1,9 +1,11 @@
 # Structure PNG capture
 
-Structure PNG exports wait for the requested isosurface geometry to finish and
-for a frame containing it to be submitted before encoding. They use the viewer's
-current sampling resolution. A geometry error refuses the export even when older
-surfaces remain visible.
+Structure PNG exports temporarily request source-quality isosurfaces and wait
+for that geometry and a frame containing it to be submitted before encoding.
+They preserve the caller's quality setting and restore interactive quality after
+capture, including when preparation, rendering, or encoding fails. Source
+extraction uses the viewer's memory budget. A geometry error refuses the export
+even when older surfaces remain visible.
 
 Geometry-setting changes, scene unmounts, and a 60-second preparation timeout
 cancel a pending capture. Concurrent captures are refused. Failed preparation,

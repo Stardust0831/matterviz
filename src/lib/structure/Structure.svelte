@@ -43,6 +43,7 @@
   import { create_volume_slice_settings } from '#lib/isosurface/slice-settings.js'
   import type { VolumeSliceSettings } from '#lib/isosurface/slice-settings.js'
   import type {
+    IsosurfaceGridInfo,
     IsosurfaceLayer,
     IsosurfaceSettings,
     VolumetricData,
@@ -813,6 +814,7 @@
   // Isosurface geometry-worker failures (chunk 404, OOM): the scene keeps its previous
   // surfaces, so without this notice the user would only see an unchanged view. Isosurface
   // sits several layers down (viewport, scene), so it picks the handler up from context
+  let isosurface_grid_info = $state<IsosurfaceGridInfo[]>([])
   let isosurface_error = $state<string>()
   set_isosurface_error_handler((message) => (isosurface_error = message))
 
@@ -1100,6 +1102,9 @@
       return displacement_summary?.rmsd
     },
     // the last isosurface meshing failure, also shown as a dismissible notice
+    get isosurface_grid_info() {
+      return isosurface_grid_info
+    },
     get isosurface_error() {
       return isosurface_error
     },
@@ -1543,6 +1548,7 @@
 
             {#if controls_config.visible(`controls`)}
               <StructureControls
+                {isosurface_grid_info}
                 bind:controls_open={
                   () => is_pane_open(`controls`), (open) => set_pane_open(`controls`, open)
                 }
@@ -1646,6 +1652,7 @@
               {hidden_elements}
               bind:polyhedra_rendered_elements
               bind:trajectory_lines_result
+              bind:isosurface_grid_info
             />
           {/snippet}
 

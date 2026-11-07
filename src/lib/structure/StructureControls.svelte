@@ -19,7 +19,11 @@
   import IsosurfaceControls from '#lib/isosurface/IsosurfaceControls.svelte'
   import VolumeSliceControls from '#lib/isosurface/VolumeSliceControls.svelte'
   import type { VolumeSliceSettings } from '#lib/isosurface/slice-settings.js'
-  import type { IsosurfaceSettings, VolumetricData } from '#lib/isosurface/types.js'
+  import type {
+    IsosurfaceGridInfo,
+    IsosurfaceSettings,
+    VolumetricData,
+  } from '#lib/isosurface/types.js'
   import { capitalize, format_num } from '#lib/labels.js'
   import ExportDestination from '#lib/io/ExportDestination.svelte'
   import { FileExportState } from '#lib/io/file-export.svelte.js'
@@ -100,6 +104,7 @@
     cell_type = $bindable(`original`),
     volumetric_data = $bindable<VolumetricData[]>(),
     isosurface_settings = $bindable<IsosurfaceSettings>(),
+    isosurface_grid_info = [],
     slice_settings = $bindable<Partial<VolumeSliceSettings>>(),
     active_volume_id = $bindable<string | undefined>(),
     display_mode = `structure`,
@@ -135,6 +140,7 @@
     sym_data?: SymmetryDataset | null
     cell_type?: CellType // Cell type: original, conventional, or primitive
     volumetric_data?: VolumetricData[] // Volumetric data volumes for isosurface controls
+    isosurface_grid_info?: IsosurfaceGridInfo[]
     isosurface_settings?: IsosurfaceSettings // Isosurface rendering settings
     slice_settings?: Partial<VolumeSliceSettings> // 2D cross-section sampling and rendering settings
     active_volume_id?: string // Selected volume ID
@@ -1173,6 +1179,7 @@
         {/if}
         {#if display_mode !== `slice` && isosurface_settings}
           <IsosurfaceControls
+            grid_info={isosurface_grid_info}
             bind:settings={isosurface_settings}
             bind:volumes={volumetric_data}
             bind:active_volume_id

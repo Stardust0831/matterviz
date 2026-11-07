@@ -8,7 +8,11 @@
   // pane; scene_props supplies caller-controlled pose overrides.
   import type { ElementSymbol } from '#lib/element/index.js'
   import StatusMessage from 'svelte-widgets/StatusMessage.svelte'
-  import type { IsosurfaceSettings, VolumetricData } from '#lib/isosurface/types.js'
+  import type {
+    IsosurfaceGridInfo,
+    IsosurfaceSettings,
+    VolumetricData,
+  } from '#lib/isosurface/types.js'
   import type { Vec2, Vec3 } from '#lib/math.js'
   import type { CameraProjection } from '#lib/settings.js'
   import type { AnyStructure, StructureHandlerData } from '#lib/structure/index.js'
@@ -128,7 +132,9 @@
     hidden_elements = new SvelteSet<ElementSymbol>(),
     polyhedra_rendered_elements = $bindable([]),
     trajectory_lines_result = $bindable(null),
+    isosurface_grid_info = $bindable([]),
   }: {
+    isosurface_grid_info?: IsosurfaceGridInfo[]
     in_grid?: boolean
     active?: boolean
     label?: string
@@ -616,6 +622,7 @@
         }
         bind:polyhedra_rendered_elements
         bind:trajectory_lines_result
+        bind:isosurface_grid_info
       />
     </Canvas>
   {/key}

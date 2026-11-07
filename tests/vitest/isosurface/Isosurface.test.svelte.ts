@@ -3,6 +3,7 @@
 import { ISOSURFACE_ERROR_CONTEXT } from '#lib/isosurface/context.js'
 import Isosurface from '#lib/isosurface/Isosurface.svelte'
 import type {
+  IsosurfaceGridInfo,
   IsosurfaceLayer,
   IsosurfaceSettings,
   VolumetricData,
@@ -60,6 +61,7 @@ type Props = {
   building?: boolean
   geometry_error?: string
   geometry_revision?: number
+  grid_info?: IsosurfaceGridInfo[]
 }
 let teardown: (() => void) | undefined
 
@@ -601,4 +603,22 @@ test(`budget changes refuse a rebuild without discarding old geometry and permit
   props.settings.geometry_memory_budget_bytes = 1_000_000
   await settle()
   expect(geometry_of(meshes()[0])).not.toBe(original)
+})
+
+test(`quality changes invalidate prepared grids and report the displayed resolution`, async () => {
+  const props = mount_isosurface({ grid_info: [] })
+  await settle()
+  const original = geometry_of(meshes()[0])
+  expect(props.grid_info?.[0].quality).toBe(`preview`)
+  props.settings.grid_quality = `source`
+  await settle()
+  expect(geometry_of(meshes()[0])).not.toBe(original)
+  expect(props.grid_info?.[0]).toMatchObject({
+    quality: `source`,
+    source_dims: [10, 10, 10],
+    effective_dims: [11, 11, 11],
+  })
+  props.settings.grid_quality = `preview`
+  await settle()
+  expect(props.grid_info?.[0].quality).toBe(`preview`)
 })
