@@ -48,7 +48,16 @@ import InstancedAtoms from '#lib/structure/InstancedAtoms.svelte'
 import MeasurementOverlays from '#lib/structure/MeasurementOverlays.svelte'
 import { mount_scene } from '../scene/mount'
 import { bind_props, doc_query } from '../setup'
-import { image_options, make_crystal, make_srtio3 } from '../test-fixtures'
+import {
+  image_options,
+  make_crystal,
+  make_grid,
+  make_srtio3,
+  make_volume,
+} from '../test-fixtures'
+import { scene_registry } from '#lib/io/export.js'
+import { DEFAULT_ISOSURFACE_SETTINGS } from '#lib/isosurface/types.js'
+import type { IsosurfaceSettings } from '#lib/isosurface/types.js'
 import { get_pbc_image_sites } from '#lib/structure/pbc.js'
 import type { Component, ComponentProps } from 'svelte'
 import { createRawSnippet, flushSync, untrack } from 'svelte'
@@ -586,13 +595,23 @@ test(`clicks drive measurement, edit-atoms and edit-bonds selections`, () => {
   }
   // A picked pair becomes a bond and the picks clear; a delete-mode click removes it again
   flush_set(state, { measure_mode: `edit-bonds` })
+  // middle- and right-button presses start orbit-controls dollies and pans: they pick nothing
+  for (const button of [1, 2]) {
+    pointer_at(scene_interactivity, 0, 0, [`pointerdown`], { button })
+    expect(state.selected_sites, `button ${button}`).toEqual([])
+  }
   click(0)
   expect(state.selected_sites).toEqual([0])
   click(3)
   expect(state.added_bonds).toMatchObject([{ site_idx_1: 0, site_idx_2: 1, order: 1 }])
   expect([state.selected_sites, state.measured_sites]).toEqual([[], []])
-  // Right-clicking the bond opens its order menu
+  // Right-clicking the bond opens its order menu, where only a primary press acts
   pointer_at(scene_interactivity, 1.5, 0, right_click, { button: 2 })
+  menu_button(`Remove`)?.dispatchEvent(
+    new PointerEvent(`pointerdown`, { bubbles: true, button: 2 }),
+  )
+  flushSync()
+  expect(state.added_bonds).toHaveLength(1)
   menu_button(`Double`)?.dispatchEvent(new PointerEvent(`pointerdown`, { bubbles: true }))
   flushSync()
   expect(state.added_bonds).toMatchObject([{ site_idx_1: 0, site_idx_2: 1, order: 2 }])
@@ -603,6 +622,8 @@ test(`clicks drive measurement, edit-atoms and edit-bonds selections`, () => {
   flushSync()
   expect(state.added_bonds).toMatchObject([{ site_idx_1: 0, site_idx_2: 1, order: 3 }])
   flush_set(state, { bond_edit_mode: `delete` })
+  pointer_at(scene_interactivity, 1.5, 0, [`pointerdown`], { button: 1 })
+  expect(state.added_bonds).toHaveLength(1)
   click(1.5)
   expect(state.added_bonds).toEqual([])
   // in delete mode a bond outranks the atom in front of it, which ignores the click
@@ -612,6 +633,48 @@ test(`clicks drive measurement, edit-atoms and edit-bonds selections`, () => {
   flush_set(state, { bond_edit_mode: `delete` })
   click(0.2) // straight down through atom 0's cap before the bond's hit cylinder
   expect(state.added_bonds).toEqual([])
+})
+
+// The move gizmo pushes its undo point on the first actual move, not on the press: a click
+// on the gizmo without dragging used to push one and so clear the redo stack
+test(`move gizmo pushes one undo point per drag that moves atoms`, () => {
+  let gizmo_props: Partial<ComponentProps<typeof extras.TransformControls>> = {}
+  const capture = vi
+    .spyOn(extras, `TransformControls`)
+    .mockImplementation((_anchor, props) => ((gizmo_props = props), {}))
+  onTestFinished(() => capture.mockRestore())
+  const on_operation_start = vi.fn()
+  const on_sites_moved = vi.fn()
+  mount_structure({
+    structure: { sites: carbons_at(0, 2) },
+    show_bonds: `never`,
+    measure_mode: `edit-atoms`,
+    selected_sites: [0, 1],
+    on_operation_start,
+    on_sites_moved,
+  })
+  const { object, onmouseDown, onmouseUp, onobjectChange } = gizmo_props
+  if (!object || !onmouseDown || !onmouseUp || !onobjectChange)
+    throw new Error(`Missing move gizmo`)
+  const gizmo_event = {} as Parameters<typeof onmouseDown>[0]
+  // press and release in place, with a snapped zero move in between
+  onmouseDown(gizmo_event)
+  onobjectChange(gizmo_event)
+  onmouseUp(gizmo_event)
+  expect(on_operation_start).not.toHaveBeenCalled()
+  expect(on_sites_moved).not.toHaveBeenCalled()
+  onmouseDown(gizmo_event)
+  for (const x_coord of [1.5, 2]) {
+    object.position.set(x_coord, 0, 0)
+    onobjectChange(gizmo_event)
+  }
+  onmouseUp(gizmo_event)
+  expect(on_operation_start).toHaveBeenCalledOnce()
+  const move = [
+    [0, 1],
+    [0.5, 0, 0],
+  ]
+  expect(on_sites_moved.mock.calls).toEqual([move, move])
 })
 
 // The add-atom plane sits inside the manual-rotation groups: its hit point is in world space
@@ -1104,9 +1167,10 @@ test(`hidden elements drop their bonds, read once per change`, () => {
   expect(hidden_reads).toBeLessThan(10) // 118 when read per bond endpoint
 })
 
-// Finding a measured pair's bond reads the bonds prop once: its getter crosses three components
-// and read per bond took 35 ms to scan a 48k-atom supercell's 110k bonds
-test(`a measured pair's bond lookup reads the bonds prop once`, () => {
+// Finding the measured pairs' bonds reads the bonds prop once for all pairs: its getter crosses
+// three components and read per bond took 35 ms to scan a 48k-atom supercell's 110k bonds, and
+// a scan per pair took 28 for 8 picks
+test(`measured pairs' bond lookup reads the bonds prop once`, () => {
   const sites = carbons_at(...Array.from({ length: 41 }, (_unused, idx) => idx * 1.3))
   const bond = (idx_1: number, idx_2: number): BondPair => ({
     site_idx_1: idx_1,
@@ -1121,7 +1185,7 @@ test(`a measured pair's bond lookup reads the bonds prop once`, () => {
   const { scene, unmount_scene } = mount_scene((anchor) =>
     MeasurementOverlays(anchor, {
       sites,
-      measured_sites: [0, 1],
+      measured_sites: [0, 1, 2],
       measure_mode: `distance`,
       lattice: null,
       label_offset: [0, 0.5, 0],
@@ -1647,6 +1711,60 @@ test(`property-colored Scene frames refresh reused atoms and restore element col
     })
   }
 })
+
+// Isosurfaces rebuild a frame (or a worker round trip) after their settings change, so a PNG
+// export awaits the scene's `ready` hook until a frame shows the requested surfaces.
+test.each([`render`, `unmount`] as const)(
+  `PNG export readiness waits for requested isosurfaces, settling on %s`,
+  async (outcome) => {
+    vi.useFakeTimers({ toFake: [`requestAnimationFrame`, `cancelAnimationFrame`] })
+    onTestFinished(() => void vi.useRealTimers())
+    const blob = (...idx: number[]) =>
+      Math.exp(-idx.reduce((sum, coord) => sum + (coord - 4) ** 2, 0) / 4)
+    const surface = (isovalue: number): IsosurfaceSettings => ({
+      ...DEFAULT_ISOSURFACE_SETTINGS,
+      layers: [
+        {
+          volume_id: `0`,
+          isovalue,
+          color: `#3b82f6`,
+          negative_color: `#ef4444`,
+          show_negative: false,
+          opacity: 1,
+          visible: true,
+        },
+      ],
+    })
+    const state = $state<SceneProps>({
+      volumetric_data: [make_volume(make_grid(8, 8, 8, blob))],
+      isosurface_settings: surface(0.3),
+      atom_opacity: 1,
+    })
+    const { canvas, render_frame, unmount_scene } = mount_structure(
+      { structure: lone_c, show_bonds: `never`, show_polyhedra: `never` },
+      state,
+    )
+    await vi.advanceTimersByTimeAsync(50)
+    const ready = scene_registry.get(canvas)?.ready
+    if (!ready) throw new Error(`StructureScene registered no PNG readiness hook`)
+    // the opacity change repaints the scene before the new surface exists
+    flush_set(state, { isosurface_settings: surface(0.5), atom_opacity: 0.5 })
+    const pending = ready()
+    const settled = vi.fn()
+    void pending.then(settled, settled)
+    await vi.advanceTimersByTimeAsync(0) // past ready()'s tick, before the rebuild frame
+    expect(render_frame()).toBe(true) // drawn before the rebuild: the previous surface
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).not.toHaveBeenCalled()
+    if (outcome === `unmount`) await unmount_scene()
+    else {
+      await vi.advanceTimersByTimeAsync(50) // the rebuild's animation frame
+      render_frame()
+    }
+    if (outcome === `render`) await expect(pending).resolves.toBeUndefined()
+    else await expect(pending).rejects.toThrow(`Structure viewer unmounted before`)
+  },
+)
 
 test(`numeric polyhedra reuse outlines and resolve colors without decoding atom records`, async () => {
   // oxfmt-ignore

@@ -88,14 +88,18 @@ function parse_lammps_box(
   }
 }
 
-// Only the final frame of a dump may be incomplete (the writer is still appending); the
-// same damage anywhere else is corruption and must not silently drop a frame.
-class TornLammpsFrameError extends Error {
-  constructor(message: string) {
+// A frame read_run drops with a warning instead of failing the dump: a torn final frame (the
+// writer is still appending; the same damage anywhere else is corruption), or with `torn`
+// false one whose coordinates LAMMPS printed as `nan`/`inf` after an MD blow-up (as XYZ skips)
+class SkippedLammpsFrameError extends Error {
+  torn: boolean
+  constructor(message: string, torn = true) {
     super(message)
-    this.name = 'TornLammpsFrameError'
+    this.name = 'SkippedLammpsFrameError'
+    this.torn = torn
   }
 }
+const NON_FINITE_TOKEN = /^[+-]?(?:nan|inf(?:inity)?)$/i
 
 type LammpsFrameHeader = {
   timestep: number
@@ -128,25 +132,34 @@ type LammpsFrameRead = {
   columns?: LammpsColumns
 }
 
-// Frame order: by atom id when the dump has ids, so every frame lists atoms in one order
-const atom_order = ({ ids, elements }: LammpsFrameRead): number[] => {
-  const order = Array.from({ length: elements.length }, (_unused, atom_idx) => atom_idx)
-  if (ids.length > 0) order.sort((left_idx, right_idx) => ids[left_idx] - ids[right_idx])
+// Frame order: by atom id when the dump has ids, so every frame lists atoms in one order.
+// Null when the file order already is that order (no ids, or ids written ascending, as
+// `dump_modify sort id` and serial runs do), sparing a sort and a permuted copy per column.
+const atom_order = ({ ids }: LammpsFrameRead): number[] | null => {
+  if (is_ascending(ids)) return null
+  const order = Array.from({ length: ids.length }, (_unused, atom_idx) => atom_idx)
+  order.sort((left_idx, right_idx) => ids[left_idx] - ids[right_idx])
   return order
+}
+const is_ascending = (ids: readonly number[]): boolean => {
+  for (let idx = 1; idx < ids.length; idx++) if (!(ids[idx] > ids[idx - 1])) return false
+  return true
 }
 
 // Frames sorted by atom id (when the dump has ids) so every frame lists atoms in one order
 const lammps_frame = (read: LammpsFrameRead, warn: WarnFn): TrajectoryFrame => {
   const { header, elements, positions, site_properties } = read
   const order = atom_order(read)
+  const sorted = <Value>(values: Value[]): Value[] =>
+    order ? order.map((atom_idx) => values[atom_idx]) : values
   return create_trajectory_frame(
-    order.map((atom_idx) => positions[atom_idx]),
-    order.map((atom_idx) => elements[atom_idx]),
+    sorted(positions),
+    sorted(elements),
     header.lattice_matrix,
     header.pbc,
     header.timestep,
     header.metadata,
-    order.map((atom_idx) => site_properties[atom_idx]),
+    sorted(site_properties),
     warn,
   )
 }
@@ -163,9 +176,11 @@ const lammps_numeric_frame = (read: LammpsFrameRead, warn: WarnFn): NumericFrame
   if (new Set(keys).size !== keys.length || keys.some((key) => /^\d+$|^__proto__$/.test(key)))
     return null
   const order = atom_order(read)
-  const n_atoms = order.length
+  const n_atoms = elements.length
   const numbers = new Uint8Array(n_atoms)
+  // the read's columns are its own, so file order hands them over as they are
   const permute = (values: Float64Array, width: number): Float64Array => {
+    if (!order) return values
     const sorted = new Float64Array(values.length)
     for (let idx = 0; idx < n_atoms; idx++)
       for (let axis = 0; axis < width; axis++)
@@ -173,7 +188,7 @@ const lammps_numeric_frame = (read: LammpsFrameRead, warn: WarnFn): NumericFrame
     return sorted
   }
   for (let idx = 0; idx < n_atoms; idx++) {
-    const atomic_number = symbol_to_atomic_number(elements[order[idx]])
+    const atomic_number = symbol_to_atomic_number(elements[order ? order[idx] : idx])
     if (!atomic_number) return null
     numbers[idx] = atomic_number
   }
@@ -229,7 +244,7 @@ function create_lammps_reader(
       idx++
     }
     if (idx < lines.count) return
-    throw new TornLammpsFrameError(
+    throw new SkippedLammpsFrameError(
       `LAMMPS frame${timestep === null ? `` : ` at timestep ${timestep}`} ends before "${prefix}"`,
     )
   }
@@ -263,7 +278,7 @@ function create_lammps_reader(
     const num_atoms = Math.trunc(Number(num_atoms_text))
     if (!(num_atoms > 0)) {
       if (idx > lines.count) {
-        throw new TornLammpsFrameError(
+        throw new SkippedLammpsFrameError(
           `LAMMPS frame at timestep ${timestep} ends after "ITEM: NUMBER OF ATOMS"`,
         )
       }
@@ -294,7 +309,7 @@ function create_lammps_reader(
     const parsed_box = parse_lammps_box(box_lines, box_kind)
     if (!parsed_box) {
       if (idx >= lines.count) {
-        throw new TornLammpsFrameError(
+        throw new SkippedLammpsFrameError(
           `LAMMPS frame at timestep ${timestep} ends inside BOX BOUNDS`,
         )
       }
@@ -309,7 +324,7 @@ function create_lammps_reader(
     // A header with no atom line after it is a torn tail, possibly cut inside its own column
     // list, so it is not validated as a frame that declares too few columns
     if (idx >= lines.count) {
-      throw new TornLammpsFrameError(
+      throw new SkippedLammpsFrameError(
         `LAMMPS frame at timestep ${timestep} ends after its "ITEM: ATOMS" header`,
       )
     }
@@ -378,7 +393,7 @@ function create_lammps_reader(
 
     for (let atom = 0; atom < num_atoms; atom++) {
       if (idx >= lines.count) {
-        throw new TornLammpsFrameError(
+        throw new SkippedLammpsFrameError(
           `LAMMPS frame at timestep ${timestep} ends after ${atom} of ${num_atoms} atoms`,
         )
       }
@@ -389,7 +404,7 @@ function create_lammps_reader(
       const torn_tail = idx >= lines.count && has_previous_frame
       if (n_cols < cols.length) {
         const message = `LAMMPS atom line ${line_number} (timestep ${timestep}) has ${n_cols} columns, expected ${cols.length}`
-        throw torn_tail ? new TornLammpsFrameError(message) : new Error(message)
+        throw torn_tail ? new SkippedLammpsFrameError(message) : new Error(message)
       }
       const coords: math.Vec3 = [scanner.num(x_col), scanner.num(y_col), scanner.num(z_col)]
       if (
@@ -397,8 +412,19 @@ function create_lammps_reader(
         !Number.isFinite(coords[1]) ||
         !Number.isFinite(coords[2])
       ) {
-        const message = `LAMMPS atom line ${line_number} (timestep ${timestep}) has non-numeric coordinates: "${lines.line(idx - 1)}"`
-        throw torn_tail ? new TornLammpsFrameError(message) : new TypeError(message)
+        const line = lines.line(idx - 1)
+        const literal = [x_col, y_col, z_col].every(
+          (col_idx) =>
+            Number.isFinite(scanner.num(col_idx)) ||
+            NON_FINITE_TOKEN.test(scanner.str(col_idx)),
+        )
+        if (literal)
+          throw new SkippedLammpsFrameError(
+            `at timestep ${timestep}: line ${line_number} "${line}"`,
+            false,
+          )
+        const message = `LAMMPS atom line ${line_number} (timestep ${timestep}) has non-numeric coordinates: "${line}"`
+        throw torn_tail ? new SkippedLammpsFrameError(message) : new TypeError(message)
       }
       let atom_type: number | undefined
       if (type_col !== undefined) {
@@ -509,7 +535,8 @@ function create_lammps_reader(
         `LAMMPS frame at timestep ${timestep} ${frame_uses_ids ? `gained` : `lost`} the atom ID column; atom identity must be tracked the same way in every frame`,
       )
     }
-    if (new Set(ids).size !== ids.length) {
+    // ascending ids cannot repeat, so only an unsorted frame needs the set
+    if (!is_ascending(ids) && new Set(ids).size !== ids.length) {
       throw new Error(`LAMMPS frame at timestep ${timestep} has duplicate atom IDs`)
     }
     identity_uses_ids ??= frame_uses_ids
@@ -530,6 +557,8 @@ function create_lammps_reader(
     on_frame: (read: LammpsFrameRead, start: number) => void,
   ): Record<string, unknown> => {
     const steps: number[] = []
+    // a blow-up leaves every later frame non-finite, so they share one warning
+    const non_finite = { count: 0, first: `` }
     idx = 0
     for (;;) {
       while (idx < lines.count && !peek_line().startsWith(`ITEM: TIME`)) idx++
@@ -537,14 +566,28 @@ function create_lammps_reader(
       try {
         const start = idx
         const read = read_frame(start, steps.length > 0, sites)
+        const { timestep } = read.header
+        // A restarted run appending to its dump writes the restart step again: keep the first
+        if (timestep === steps.at(-1)) {
+          warn(`Skipping LAMMPS frame at line ${start + 1} repeating timestep ${timestep}`)
+          continue
+        }
         on_frame(read, start)
-        steps.push(read.header.timestep)
+        steps.push(timestep)
       } catch (error) {
-        if (!(error instanceof TornLammpsFrameError)) throw error
-        warn(`Dropping truncated final LAMMPS frame`, error)
-        break
+        if (!(error instanceof SkippedLammpsFrameError)) throw error
+        if (error.torn) {
+          warn(`Dropping truncated final LAMMPS frame`, error)
+          break
+        }
+        non_finite.first ||= error.message
+        non_finite.count++
       }
     }
+    if (non_finite.count > 0)
+      warn(
+        `Skipping ${non_finite.count} LAMMPS frame(s) with non-finite coordinates, the first ${non_finite.first}`,
+      )
     if (steps.length === 0) {
       throw new Error(`No valid frames found in LAMMPS trajectory`)
     }
@@ -601,7 +644,11 @@ export function open_lammps_frames(
     const numbers = new Uint8Array(
       elements.map((element) => symbol_to_atomic_number(element) ?? 0),
     )
-    frames.push({ start, header, numbers: numbers.includes(0) ? null : numbers })
+    // Frames repeating the previous frame's species share its array: 10k frames of 10k atoms
+    // otherwise kept 100 MB of copies, and the plot rows count one topology's elements once
+    const previous = frames.at(-1)?.numbers
+    const shared = previous && math.same_values(previous, numbers) ? previous : numbers
+    frames.push({ start, header, numbers: numbers.includes(0) ? null : shared })
   })
   const read_frame = (frame_idx: number, sites: LammpsSites) =>
     reader.read_frame(frames[frame_idx].start, frame_idx > 0, sites)

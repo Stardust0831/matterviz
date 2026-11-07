@@ -170,7 +170,10 @@ const dist_to_face = (face: HullFace, point: Vec3): number =>
 // matching VESTA behavior). Supports up to 65535 input points (edge keys are
 // packed into 32-bit integers) - far beyond any coordination shell.
 export function convex_hull_3d(points: readonly Vec3[]): ConvexHullResult {
-  // Dedup points (coordination shells are tiny, O(n^2) is fine)
+  // Dedup points within 1e-3 Å (coordination shells are tiny, O(n^2) is fine): split partial
+  // sites whose coordinates were rounded apart double a corner, and the sliver faces between
+  // such near-copies broke quickhull's horizon (wrong, unclosed hulls). No two real neighbors
+  // sit that close.
   const unique: Vec3[] = []
   const unique_input_idx: number[] = []
   for (let p_idx = 0; p_idx < points.length; p_idx++) {
@@ -180,7 +183,7 @@ export function convex_hull_3d(points: readonly Vec3[]): ConvexHullResult {
       const delta_x = pixel_x - other[0]
       const delta_y = pixel_y - other[1]
       const delta_z = pixel_z - other[2]
-      if (delta_x * delta_x + delta_y * delta_y + delta_z * delta_z < 1e-12) {
+      if (delta_x * delta_x + delta_y * delta_y + delta_z * delta_z < 1e-6) {
         is_dup = true
         break
       }
@@ -496,10 +499,13 @@ function is_anion_vertex(
 // proximity-perceived bonds (boundary shells are completed upstream by
 // bond-completing image atoms - see find_image_atoms in pbc.ts); explicit bonds
 // carrying a cell_shift put the corner at the lattice image the bond points to.
+// `skip_hull` centers come back hull-less (faces [], volume 0, all candidate vertices): image
+// completion only asks which interior centers qualify, and their hulls cost ~half its time.
 export function compute_polyhedra(
   structure: AnyStructure,
   bond_data: BondData,
   options: PolyhedraOptions = {},
+  skip_hull?: (center_site_idx: number) => boolean,
 ): Polyhedron[] {
   const {
     neighbor_mode = DEFAULTS.structure.polyhedra_neighbor_mode,
@@ -726,6 +732,18 @@ export function compute_polyhedra(
     if (seen_positions.has(pos_key)) continue
     seen_positions.add(pos_key)
 
+    if (skip_hull?.(site_idx)) {
+      polyhedra.push({
+        center_site_idx: site_idx,
+        center_orig_idx: orig_idx,
+        center_element: element,
+        vertices: vertex_positions,
+        vertex_site_idxs,
+        faces: [],
+        volume: 0,
+      })
+      continue
+    }
     const hull = convex_hull_3d(vertex_positions)
     if (hull.faces.length === 0) continue
     const spans = [0, 1, 2].map((axis) => {

@@ -32,6 +32,8 @@ import {
   is_trajectory_file,
 } from '#lib/trajectory/format-detect.js'
 import { get_unsupported_format_message } from '#lib/trajectory/parse/index.js'
+import { open_lammps_frames } from '#lib/trajectory/parse/lammps.js'
+import { snapshot_topologies } from '#lib/structure/site.js'
 import {
   ase_calculator_data,
   parse_ase_trajectory,
@@ -987,6 +989,37 @@ describe(`LAMMPS`, () => {
     expect(run.warnings).toEqual([`Dropping truncated final LAMMPS frame: ${detail}`])
   })
 
+  // An MD run that blew up prints `nan`/`inf` coordinates: those frames are skipped with one
+  // warning (as XYZ does) instead of failing the whole dump. A restarted run appending to its
+  // dump repeats the restart step, which is skipped too, not rejected as non-ascending.
+  it(`skips non-finite frames and a repeated restart timestep, keeping the rest`, async () => {
+    const frame = (timestep: number, coord: string) =>
+      lammps_frame(`id type x y z`, [`1 1 1 0 0`, `2 1 ${coord} 0 0`], { timestep })
+    const content = [
+      [0, `8`],
+      [1, `nan`],
+      [2, `3`],
+      [2, `4`],
+      [3, `-inf`],
+      [4, `Infinity`],
+      [5, `5`],
+    ]
+      .map(([timestep, coord]) => frame(Number(timestep), String(coord)))
+      .join(`\n`)
+    for (const index_above_bytes of [Infinity, 0]) {
+      const run = await open(content, `nan.lammpstrj`, { index_above_bytes })
+      const frames = await frames_of(run)
+      expect(frames.map(({ step }) => step)).toEqual([0, 2, 5])
+      expect(frames[1].structure.sites[1].xyz).toEqual([3, 0, 0]) // the first copy of step 2
+      await run.properties.done
+      expect(run.properties.rows.map(({ step }) => step)).toEqual([0, 2, 5])
+      expect(run.warnings).toEqual([
+        `Skipping LAMMPS frame at line 34 repeating timestep 2`,
+        `Skipping 3 LAMMPS frame(s) with non-finite coordinates, the first at timestep 1: line 22 "2 1 nan 0 0"`,
+      ])
+    }
+  })
+
   // Issue #449: a GCMC/deposition dump whose atom set changes is still a browsable
   // trajectory; only displacement analysis needs a constant atom set and says so itself
   it(`sorts every frame by atom ID and keeps frames whose atom set changed (GCMC)`, async () => {
@@ -1016,6 +1049,17 @@ describe(`LAMMPS`, () => {
     await expect(run.collect_positions?.({ frame_stride: 3 })).rejects.toThrow(
       `Atom count changed at frame 4: expected 2 atoms, got 3`,
     )
+    // plot rows of frames repeating the previous species share one array (counted once)
+    const source = open_lammps_frames(
+      new TextLines(content),
+      expect.unreachable,
+      TEST_ATOM_TYPES,
+    )
+    const [first, second, third, fourth] = [0, 1, 2, 3].map((frame_idx) =>
+      snapshot_topologies.get(source.plot_row_frame(frame_idx).structure),
+    )
+    expect([second, third].every((numbers) => numbers === first)).toBe(true)
+    expect(fourth).not.toBe(first)
   })
 
   it(`warns instead of rejecting a multi-frame dump without an ID column`, async () => {
@@ -1307,8 +1351,8 @@ describe(`indexed and byte-sourced XYZ, XDATCAR and LAMMPS`, () => {
   })
 
   // Reads and position sweeps of the common layouts build no Site records to encode
-  // (2-3.5x per frame)
-  it.each<[string, () => string]>([
+  // (2-3.5x per frame; ASE 20k atoms: 4x)
+  it.each<[string, () => string | ArrayBuffer]>([
     [`md.extxyz`, () => synthetic_extxyz(4, 5)],
     [`XDATCAR`, site_text(`trajectories/vasp-XDATCAR.MD.gz`)],
     [
@@ -1319,6 +1363,7 @@ describe(`indexed and byte-sourced XYZ, XDATCAR and LAMMPS`, () => {
           `1 2 0.5 0.5 0.5 1 1 1 0 0 0 -0.5`,
         ]),
     ],
+    [`md.traj`, () => make_ase_md_buffer(5)],
   ])(`%s reads numeric frames without Site records`, async (filename, make_text) => {
     const run = await open(make_text(), filename, { index_above_bytes: 0 })
     await run.properties.done
@@ -1556,6 +1601,8 @@ describe(`XYZ`, () => {
     // Source metadata must not masquerade as viewer-generated image/supercell provenance.
     [`orig_site_idx:I:1:orig_unit_cell_idx:I:1:completion_image:L:1`, `H 0 0 0 7 2 T`,
       { orig_site_idx: 7, orig_unit_cell_idx: 2, completion_image: true }],
+    // names the reader interprets match in any case; any other column keeps its own
+    [`Mass:R:1:Charges:R:1`, `H 0 0 0 1.5 -0.5`, { Mass: 1.5, charge: -0.5 }],
     // A column too short on the line is dropped for that atom rather than stored as NaN
     [`charge:R:1:extra:R:1`, `H 0 0 0 0.5`, { charge: 0.5 }],
     // Non-finite numeric tokens are dropped the same way
@@ -1682,34 +1729,18 @@ describe(`XYZ`, () => {
   })
 
   // One warning per unknown symbol, not per atom: Wannier centres (`X`) flooded the list
-  it(`normalises symbol casing and skips unknown symbols with a warning`, async () => {
-    const frame = xyz_frame([
-      `FE 0 0 0`,
-      `si 1 0 0`,
-      `X 2 0 0`,
-      `O 3 0 0`,
-      `X 4 0 0`,
-      `Q 5 0 0`,
-    ])
-    const run = await open(`${frame}\n${frame}`, `ghost.xyz`)
-    expect((await frames_of(run)).map(elements_of)).toEqual([
-      [`Fe`, `Si`, `O`],
-      [`Fe`, `Si`, `O`],
-    ])
-    expect(run.warnings).toEqual([
-      `Skipping XYZ atoms with unknown element symbol "X", first in frame 1 (line 1) at line 5`,
-      `Skipping XYZ atoms with unknown element symbol "Q", first in frame 1 (line 1) at line 8`,
-    ])
-  })
-
   // An indexed frame decodes for its plot row and again on every read: each warning once
-  it(`warns once per unknown symbol in an indexed run however often frames are read`, async () => {
-    const frame = xyz_frame([`X 0 0 0`, `O 3 0 0`])
-    const run = await open(`${frame}\n${frame}`, `ghost.xyz`, { index_above_bytes: 0 })
+  // oxfmt-ignore
+  it.each([[Infinity, `frame 1 (line 1)`], [0, `indexed frame 1`]])(
+    `normalises symbol casing and warns once per unknown symbol (index above %d bytes)`, async (index_above_bytes, label) => {
+    const frame = xyz_frame([`FE 0 0 0`, `si 1 0 0`, `X 2 0 0`, `O 3 0 0`, `X 4 0 0`, `Q 5 0 0`])
+    const run = await open(`${frame}\n${frame}`, `ghost.xyz`, { index_above_bytes })
     await run.properties.done
-    for (let read = 0; read < 3; read++) await frames_of(run)
+    for (let read = 0; read < 3; read++)
+      expect((await frames_of(run)).map(elements_of)).toEqual([[`Fe`, `Si`, `O`], [`Fe`, `Si`, `O`]])
     expect(run.warnings).toEqual([
-      `Skipping XYZ atoms with unknown element symbol "X", first in indexed frame 1 at line 3`,
+      `Skipping XYZ atoms with unknown element symbol "X", first in ${label} at line 5`,
+      `Skipping XYZ atoms with unknown element symbol "Q", first in ${label} at line 8`,
     ])
   })
 
@@ -1774,6 +1805,25 @@ describe(`XYZ`, () => {
       const run = await open(content, `complete.xyz`, options)
       expect(await steps_of(run)).toEqual(steps)
       expect(run.warnings).toEqual([])
+    }
+  })
+
+  // Frames the walk cannot sample (`nan` coordinates after an MD blow-up, a stray title) are
+  // stepped over; they vanished silently, which mid-file also renumbered every later frame.
+  // Frames are 6 lines (count, comment, 4 atoms), so frame 2 spans lines 7-12.
+  const nan_frame = xyz_frame([`H nan nan nan`, ...four_atoms().slice(1)])
+  // oxfmt-ignore
+  it.each([
+    [`a nan frame between two`, [xyz_frame(four_atoms()), nan_frame, xyz_frame(four_atoms(`H 2 2 2`))], [0, 1], `Skipping XYZ lines 7-12 between frames 1 and 2`],
+    [`an Infinity frame between two`, [xyz_frame(four_atoms()), xyz_frame([`H Infinity 0 0`, ...four_atoms().slice(1)]), xyz_frame(four_atoms())], [0, 1], `Skipping XYZ lines 7-12 between frames 1 and 2`],
+    [`nan frames at the end`, [xyz_frame(four_atoms()), xyz_frame(four_atoms()), nan_frame, nan_frame], [0, 1], `Skipping XYZ lines 13-24 after frame 2`],
+    [`a title before the first frame`, [`water box`, xyz_frame(four_atoms()), xyz_frame(four_atoms())], [0, 1], `Skipping XYZ lines 1-1 before frame 1`],
+  ])(`warns about lines holding no frame: %s`, async (_label, parts, steps, warning) => {
+    const content = parts.join(`\n`)
+    for (const options of [{}, { index_above_bytes: 0 }]) {
+      const run = await open(content, `blowup.xyz`, options)
+      expect(await steps_of(run)).toEqual(steps)
+      expect(run.warnings).toEqual([expect.stringContaining(warning)])
     }
   })
 

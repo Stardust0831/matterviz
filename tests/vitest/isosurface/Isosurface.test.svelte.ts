@@ -1,13 +1,14 @@
 // Mounts Isosurface.svelte against a recording Threlte stub: layer resolution, geometry
 // rebuild/reuse, lobe signs, render ordering and cross-volume vertex coloring.
 import { ISOSURFACE_ERROR_CONTEXT } from '#lib/isosurface/context.js'
+import type * as geometry_module from '#lib/isosurface/geometry.js'
 import Isosurface from '#lib/isosurface/Isosurface.svelte'
 import type {
   IsosurfaceLayer,
   IsosurfaceSettings,
   VolumetricData,
 } from '#lib/isosurface/types.js'
-import { DEFAULT_ISOSURFACE_SETTINGS } from '#lib/isosurface/types.js'
+import { DEFAULT_ISOSURFACE_SETTINGS, MAX_GRID_POINTS } from '#lib/isosurface/types.js'
 import type * as worker_client from '#lib/worker-client.svelte.js'
 import { flushSync, mount, unmount } from 'svelte'
 import { BufferAttribute, type BufferGeometry } from 'three/webgpu'
@@ -33,6 +34,20 @@ vi.mock(`#lib/worker-client.svelte.js`, async (import_original) => {
   return {
     ...original,
     can_create_worker: () => !worker_gate.workers_disabled && original.can_create_worker(),
+  }
+})
+
+// Throws from the main-thread extraction (e.g. a RangeError when a typed array can't be
+// allocated) while set
+const sync_failure = vi.hoisted(() => ({ error: null as Error | null }))
+vi.mock(`#lib/isosurface/geometry.js`, async (import_original) => {
+  const original = await import_original<typeof geometry_module>()
+  return {
+    ...original,
+    compute_isosurface_geometries: (input: geometry_module.GeometryInput) => {
+      if (sync_failure.error) throw sync_failure.error
+      return original.compute_isosurface_geometries(input)
+    },
   }
 })
 
@@ -286,7 +301,7 @@ describe(`Isosurface`, () => {
     }
     expect(pending).toHaveLength(1)
     expect(pending[0].signal.aborted).toBe(false)
-    pending[0].resolve({ volumes: [] })
+    pending[0].resolve({ surfaces: [] })
     await settle()
     const isovalues = compute_geometries_async.mock.calls.map(
       ([input]) => input.volumes[0].surfaces[0].isovalue,
@@ -309,11 +324,11 @@ describe(`Isosurface`, () => {
     await settle()
     props.settings.layers[0].isovalue = 0.4
     await settle()
-    pending[0].resolve({ volumes: [] })
+    pending[0].resolve({ surfaces: [] })
     await settle()
     expect(props.building).toBe(true) // the rerun at 0.4 is in flight
     invalidate.mockClear()
-    pending[1].resolve({ volumes: [] })
+    pending[1].resolve({ surfaces: [] })
     await settle()
     expect(props.building).toBe(false)
     expect(invalidate).toHaveBeenCalled() // a fresh frame for whoever waits on the flag
@@ -327,7 +342,7 @@ describe(`Isosurface`, () => {
     await settle()
     props.settings.layers[0].isovalue = 0.4
     flushSync() // queues a frame for the rebuild, which has not run yet
-    pending[0].resolve({ volumes: [] })
+    pending[0].resolve({ surfaces: [] })
     await vi.advanceTimersByTimeAsync(0) // microtasks only, no frame
     expect(props.building).toBe(true)
     await settle()
@@ -348,32 +363,26 @@ describe(`Isosurface`, () => {
     teardown = undefined
     // an idle worker outlived every isosurface
     expect(compute_geometries_async.release).toHaveBeenCalledOnce()
-    pending[0].resolve({ volumes: [] })
+    pending[0].resolve({ surfaces: [] })
     await settle()
     expect(compute_geometries_async).toHaveBeenCalledOnce()
   })
 
-  // The prepared grid was filed under the range read after the worker await, so a halo change
-  // mid-job cached the old window under the new key and the rerun kept drawing it
+  // the rerun posts the new (halo-widened) window, and the worker never receives the source volume
   test(`a range change during a worker job re-extracts the new window`, async () => {
     const pending = hold_worker_jobs()
     const props = mount_isosurface({ volumes: [big_volume()] })
     await settle()
     props.settings.halo = 0.25
     await settle()
-    const [job] = compute_geometries_async.mock.calls[0][0].volumes
-    const grid = { values: new Float64Array(8), dims: [2, 2, 2], order: `z_fastest` }
-    const { lattice, origin } = job.volume
-    pending[0].resolve({
-      volumes: [
-        { token: job.token, grid, lattice, origin, prepare_geometry_ms: 0, surfaces: [] },
-      ],
-    })
+    pending[0].resolve({ surfaces: [] })
     await settle()
-    expect(compute_geometries_async).toHaveBeenCalledTimes(2)
-    expect(compute_geometries_async.mock.calls[1][0].volumes[0].range).toEqual(
-      Array.from({ length: 3 }, () => [-0.25, 1.25]),
-    )
+    const jobs = compute_geometries_async.mock.calls.map(([input]) => input.volumes[0])
+    expect(jobs.map(({ lattice }) => lattice[0][0] / big_volume().lattice[0][0])).toEqual([
+      1, 1.5,
+    ])
+    for (const { grid } of jobs)
+      expect(grid.values.length).toBeLessThanOrEqual(MAX_GRID_POINTS)
   })
 
   test(`large grids stay on the main thread where workers are disabled`, async () => {
@@ -503,37 +512,55 @@ describe(`Isosurface`, () => {
   })
 
   // A worker that dies after construction (chunk 404, OOM, module import failure) used to be
-  // console.error'd only, leaving the user staring at an unchanged scene with no explanation.
-  // Standalone usage reports through the on_error prop; inside a host (Structure) the handler
-  // comes from context, and an explicit prop still wins over it
+  // console.error'd only, leaving the user staring at an unchanged scene with no explanation,
+  // and a main-thread extraction that threw (e.g. typed-array allocation failure) was an
+  // unhandled rejection. Standalone usage reports through the on_error prop; inside a host
+  // (Structure) the handler comes from context, and an explicit prop still wins over it
   test.each([
-    [`on_error prop`, true, false],
-    [`context handler`, false, true],
-    [`prop over context`, true, true],
-  ])(
-    `worker failure after construction reports through %s`,
-    async (_label, with_prop, with_context) => {
+    [`worker`, `on_error prop`, true, false],
+    [`worker`, `context handler`, false, true],
+    [`worker`, `prop over context`, true, true],
+    [`main thread`, `on_error prop`, true, false],
+    [`main thread`, `context handler`, false, true],
+  ])(`%s failure reports through %s`, async (path, _label, with_prop, with_context) => {
+    const error_text =
+      path === `worker`
+        ? `Failed to fetch dynamically imported module`
+        : `Array buffer allocation failed`
+    if (path === `worker`) {
       hold_worker_jobs()
-      compute_geometries_async.mockRejectedValueOnce(
-        new Error(`Failed to fetch dynamically imported module`),
-      )
-      const error_spy = vi.spyOn(console, `error`).mockImplementation(() => {})
-      const prop_handler = vi.fn()
-      const context_handler = vi.fn()
-      mount_isosurface(
-        { volumes: [big_volume()], on_error: with_prop ? prop_handler : undefined },
-        with_context ? new Map([[ISOSURFACE_ERROR_CONTEXT, context_handler]]) : undefined,
-      )
+      compute_geometries_async.mockRejectedValueOnce(new Error(error_text))
+    } else sync_failure.error = new RangeError(error_text)
+    const error_spy = vi.spyOn(console, `error`).mockImplementation(() => {})
+    const prop_handler = vi.fn()
+    const context_handler = vi.fn()
+    const props = mount_isosurface(
+      {
+        volumes: [path === `worker` ? big_volume() : positive_volume()],
+        on_error: with_prop ? prop_handler : undefined,
+        building: false,
+      },
+      with_context ? new Map([[ISOSURFACE_ERROR_CONTEXT, context_handler]]) : undefined,
+    )
+    try {
       await settle()
-      expect(compute_geometries_async).toHaveBeenCalledTimes(1)
-      const message = `Isosurface geometry failed: Failed to fetch dynamically imported module`
-      const [winner, loser] = with_prop
-        ? [prop_handler, context_handler]
-        : [context_handler, prop_handler]
-      expect(winner).toHaveBeenCalledWith(message)
-      expect(loser).not.toHaveBeenCalled()
-      expect(meshes()).toHaveLength(0)
-      expect(error_spy).toHaveBeenCalled()
-    },
-  )
+    } finally {
+      sync_failure.error = null
+    }
+    expect(compute_geometries_async).toHaveBeenCalledTimes(path === `worker` ? 1 : 0)
+    const [winner, loser] = with_prop
+      ? [prop_handler, context_handler]
+      : [context_handler, prop_handler]
+    expect(winner).toHaveBeenCalledExactlyOnceWith(`Isosurface geometry failed: ${error_text}`)
+    expect(loser).not.toHaveBeenCalled()
+    expect(meshes()).toHaveLength(0)
+    expect(error_spy).toHaveBeenCalled()
+    expect(props.building).toBe(false)
+    if (path === `main thread`) {
+      // the failed rebuild left no stale state: the next geometry change extracts again
+      props.settings = with_layers([layer(0.4)])
+      await settle()
+      expect(meshes()).toHaveLength(2) // back + front pass of the translucent surface
+    }
+  })
 })
